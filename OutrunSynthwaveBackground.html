@@ -221,15 +221,15 @@
       /**
        * Computes terrain elevation Y at world (x, z).
        * Central road/valley corridor stays flat (y = 0) with gentle subtle ripples,
-       * while flanking mountain ranges rise organically on both left and right sides.
+       * foreground hills near the camera are flattened, and twin mountain ranges
+       * rise prominently further toward the horizon.
        */
       function getTerrainHeight(wx, wz) {
         const absX = Math.abs(wx);
 
-        // Flat central valley corridor (half-width ~ 18 world units)
+        // Flat central valley corridor (half-width ~ 17.5 world units)
         const valleyHalfWidth = 17.5;
         if (absX <= valleyHalfWidth) {
-          // Very subtle micro-undulation near edges of road
           return 0.0;
         }
 
@@ -238,8 +238,14 @@
         const ramp = Math.min(1.0, distFromRoad / 36.0);
         const smoothRamp = ramp * ramp * (3.0 - 2.0 * ramp);
 
+        // Foreground Z attenuation: keep hills much flatter close to the camera
+        // and rise smoothly into taller twin mountain ridges toward the horizon
+        const relZ = Math.max(0.0, wz - camera.z);
+        const nearFlatten = Math.min(1.0, Math.max(0.0, (relZ - 14.0) / 155.0));
+        const zAttenuation = 0.08 + 0.92 * (nearFlatten * nearFlatten * (3.0 - 2.0 * nearFlatten));
+
         // Create prominent flanking mountain ridges near the valley edge, tapering further out
-        const ridgeEnvelope = Math.exp(-Math.pow((distFromRoad - 34.0) / 58.0, 2.0)) * 0.72 + 0.38;
+        const ridgeEnvelope = Math.exp(-Math.pow((distFromRoad - 38.0) / 85.0, 2.0)) * 0.78 + 0.34;
 
         // Combine multi-octave random noise + slight jagged vertex jitter
         const baseNoise = fractalMountainNoise(wx, wz);
@@ -248,8 +254,14 @@
         // Macro z-modulation so mountain clusters vary naturally along the flight path
         const clusterMod = 0.68 + 0.52 * smoothNoise(wx * 0.03 + 4.1, wz * 0.045);
 
-        const maxPeakHeight = 46.0;
-        const height = smoothRamp * ridgeEnvelope * clusterMod * (baseNoise + microJitter) * maxPeakHeight;
+        const maxPeakHeight = 48.0;
+        const height =
+          smoothRamp *
+          zAttenuation *
+          ridgeEnvelope *
+          clusterMod *
+          (baseNoise + microJitter) *
+          maxPeakHeight;
 
         return Math.max(0.0, height);
       }
@@ -258,159 +270,162 @@
       // 2. PERSPECTIVE 3D -> 2D PROJECTION HELPER
       // =========================================================================
       function project3D(wx, wy, wz) {
-        const relX = wx - camera.x;
-        const relY = wy - camera.y;
-        const relZ = wz - camera.z;
-
-        if (relZ <= 0.5) return null;
-
-        const scale = FOV / relZ;
-        return {
-          x: CX + relX * scale,
-          y: CY - relY * scale,
-          z: relZ,
-          scale: scale
-        };
+        const dz = wz - camera.z;
+        if (dz <= 0.5) {
+          return null;
+        }
+        const scale = FOV / dz;
+        const sx = CX + (wx - camera.x) * scale;
+        const sy = CY - (wy - camera.y) * scale;
+        return { x: sx, y: sy, scale: scale, dz: dz };
       }
 
       // =========================================================================
-      // 3. 3D STARFIELD (EACH STAR = SVG CIRCLE OVER 4-POINT STAR)
+      // 3. 3D STARFIELD (SVG CIRCLE OVER FOUR-POINT STAR POLYGON)
       // =========================================================================
-      const NUM_STARS = 220;
-      const STAR_Z_MIN = 80;
-      const STAR_Z_MAX = 950;
+      const NUM_STARS = 190;
+      const STAR_DEPTH_MIN = 220;
+      const STAR_DEPTH_MAX = 1350;
+      const STAR_SPAN_Z = STAR_DEPTH_MAX - STAR_DEPTH_MIN;
       const stars = [];
 
-      // Create SVG elements for each 3D star
-      for (let i = 0; i < NUM_STARS; i++) {
-        // Distribute across upper sky dome in 3D coordinates
-        const z = STAR_Z_MIN + Math.random() * (STAR_Z_MAX - STAR_Z_MIN);
-        // Spread X and Y proportional to Z so stars cover the visible sky frustum
-        const spreadX = (z / FOV) * 950;
-        const x = (Math.random() * 2 - 1) * spreadX;
-
-        // Keep stars above horizon (y > 8 in world space) up to top of sky
-        const maxSkyY = (z / FOV) * 580;
-        const minSkyY = (z / FOV) * 18;
-        const y = minSkyY + Math.random() * (maxSkyY - minSkyY);
-
-        // ~12 hero stars with distinct cyan / pink / bright white 4-point sparkles
-        const isHero = i < 14;
-        const tintRoll = Math.random();
-        let rayColor = "#ffffff";
-        let coreColor = "#ffffff";
-
-        if (isHero) {
-          if (tintRoll < 0.42) {
-            rayColor = "#70b5ff";
-            coreColor = "#e6f3ff";
-          } else if (tintRoll < 0.82) {
-            rayColor = "#ff6ec7";
-            coreColor = "#ffe6f5";
-          } else {
-            rayColor = "#b8d4ff";
-            coreColor = "#ffffff";
-          }
-        } else {
-          if (tintRoll < 0.25) rayColor = "#b5c9ff";
-          else if (tintRoll < 0.45) rayColor = "#f5b8e6";
-          else rayColor = "#dcd8ff";
-        }
-
-        const baseRadius = isHero ? (2.1 + Math.random() * 1.1) : (0.75 + Math.random() * 1.05);
-        const rayLength = isHero ? (11 + Math.random() * 7) : (2.4 + Math.random() * 2.6);
-        const twinklePhase = Math.random() * Math.PI * 2;
-        const twinkleSpeed = 1.2 + Math.random() * 2.5;
-
-        // Group container for each star
-        const g = document.createElementNS(SVG_NS, "g");
-        if (isHero) {
-          g.setAttribute("filter", "url(#star-glow)");
-        }
-
-        // 1) Four-point star polygon underneath
-        const fourPoint = document.createElementNS(SVG_NS, "polygon");
-        fourPoint.setAttribute("fill", rayColor);
-        fourPoint.setAttribute("opacity", isHero ? "0.95" : "0.75");
-
-        // 2) SVG circle layered directly over the center of the four-point star
-        const centerCircle = document.createElementNS(SVG_NS, "circle");
-        centerCircle.setAttribute("cx", "0");
-        centerCircle.setAttribute("cy", "0");
-        centerCircle.setAttribute("fill", coreColor);
-
-        g.appendChild(fourPoint);
-        g.appendChild(centerCircle);
-        starsLayer.appendChild(g);
-
-        stars.push({
-          x,
-          y,
-          z,
-          baseRadius,
-          rayLength,
-          isHero,
-          twinklePhase,
-          twinkleSpeed,
-          g,
-          fourPoint,
-          centerCircle
-        });
+      /**
+       * Builds a crisp 4-point star SVG polygon point string centered at (0, 0)
+       * with outer spike length R and inner waist r.
+       */
+      function buildFourPointStarPoints(outerR, innerR) {
+        const pts = [
+          [0, -outerR],
+          [innerR, -innerR],
+          [outerR, 0],
+          [innerR, innerR],
+          [0, outerR],
+          [-innerR, innerR],
+          [-outerR, 0],
+          [-innerR, -innerR]
+        ];
+        return pts.map(p => `${p[0].toFixed(2)},${p[1].toFixed(2)}`).join(" ");
       }
 
+      // Initialize 3D star coordinates and SVG primitives
+      (function initStars() {
+        for (let i = 0; i < NUM_STARS; i++) {
+          // Deterministic distribution across the upper sky dome
+          const rx = hash2D(i * 1.37, 3.11) * 2.0 - 1.0; // [-1, 1]
+          const ry = hash2D(i * 2.71, 7.43); // [0, 1]
+          const rz = hash2D(i * 5.19, 11.87); // [0, 1]
+
+          const z = STAR_DEPTH_MIN + rz * STAR_SPAN_Z;
+          // Spread stars wide enough in 3D space to fill the sky frustum
+          const maxWorldX = (z / FOV) * 760;
+          const wx = rx * maxWorldX;
+          // Place stars from just above the horizon up to the top of the frame
+          const maxWorldY = camera.y + (z / FOV) * 560;
+          const wy = camera.y + 18 + ry * (maxWorldY - camera.y - 18);
+
+          // Highlight a subset of stars as prominent 4-point sparkle stars (like the magenta/cyan ones in screenshot)
+          const isSparkleHero = i % 16 === 0;
+          const baseRadius = isSparkleHero
+            ? 2.4 + hash2D(i, 21.3) * 1.1
+            : 0.95 + hash2D(i, 31.7) * 1.15;
+
+          // Tint stars subtly based on horizontal hemisphere (warm pink-white left, cool blue-white right)
+          let starColor = "#ffffff";
+          let spikeColor = "#dce8ff";
+          if (isSparkleHero) {
+            if (wx < 0) {
+              starColor = "#ffd6f2";
+              spikeColor = "#ff7ad9";
+            } else {
+              starColor = "#d9eeff";
+              spikeColor = "#6bb5ff";
+            }
+          } else if (hash2D(i, 41.9) > 0.72) {
+            starColor = wx < 0 ? "#f8c8ea" : "#bcd8ff";
+            spikeColor = starColor;
+          }
+
+          // Group container positioned via 3D projection
+          const g = document.createElementNS(SVG_NS, "g");
+          if (isSparkleHero) {
+            g.setAttribute("filter", "url(#star-glow)");
+          }
+
+          // 1) Four-point star underneath
+          const fourPoint = document.createElementNS(SVG_NS, "polygon");
+          const outerSpike = isSparkleHero ? baseRadius * 4.4 : baseRadius * 2.5;
+          const innerWaist = isSparkleHero ? baseRadius * 0.58 : baseRadius * 0.48;
+          fourPoint.setAttribute("points", buildFourPointStarPoints(outerSpike, innerWaist));
+          fourPoint.setAttribute("fill", spikeColor);
+          fourPoint.setAttribute("opacity", isSparkleHero ? "0.92" : "0.72");
+
+          // 2) SVG circle centered directly over the four-point star
+          const coreCircle = document.createElementNS(SVG_NS, "circle");
+          coreCircle.setAttribute("cx", "0");
+          coreCircle.setAttribute("cy", "0");
+          coreCircle.setAttribute("r", baseRadius.toFixed(2));
+          coreCircle.setAttribute("fill", starColor);
+
+          g.appendChild(fourPoint);
+          g.appendChild(coreCircle);
+          starsLayer.appendChild(g);
+
+          stars.push({
+            el: g,
+            wx: wx,
+            wy: wy,
+            baseZ: z,
+            phase: hash2D(i, 53.1) * Math.PI * 2,
+            twinkleSpeed: 1.4 + hash2D(i, 67.3) * 2.4,
+            isHero: isSparkleHero
+          });
+        }
+      })();
+
       function updateStars(timeSec) {
-        const spanZ = STAR_Z_MAX - STAR_Z_MIN;
+        // Stars move slowly in 3D space so they drift gently closer as the camera advances
+        const starParallaxZ = camera.z * 0.45;
 
         for (let i = 0; i < stars.length; i++) {
           const s = stars[i];
+          // Wrap star depth seamlessly within [STAR_DEPTH_MIN, STAR_DEPTH_MAX]
+          let relZ = (s.baseZ - starParallaxZ - STAR_DEPTH_MIN) % STAR_SPAN_Z;
+          if (relZ < 0) relZ += STAR_SPAN_Z;
+          const worldZ = camera.z + STAR_DEPTH_MIN + relZ;
 
-          // Seamless forward wrapping in 3D Z as camera advances
-          let relZ = (s.z - camera.z * 0.45 - STAR_Z_MIN) % spanZ;
-          if (relZ < 0) relZ += spanZ;
-          const worldZ = camera.z + STAR_Z_MIN + relZ;
-
-          const proj = project3D(s.x, s.y, worldZ);
-          if (!proj || proj.x < -120 || proj.x > VIEW_W + 120 || proj.y < -120 || proj.y > CY + 30) {
-            s.g.setAttribute("display", "none");
+          const proj = project3D(s.wx, s.wy, worldZ);
+          if (!proj) {
+            s.el.setAttribute("opacity", "0");
             continue;
           }
 
-          s.g.removeAttribute("display");
+          // Scale star slightly based on its 3D depth
+          const depthRatio = 1.0 - relZ / STAR_SPAN_Z; // 0 far -> 1 near
+          const perspectiveScale = 0.52 + depthRatio * 0.85;
 
-          // Subtle perspective scaling as camera moves closer
-          const depthFactor = Math.max(0.45, Math.min(1.65, 420 / proj.z));
-          const twinkle = 0.82 + 0.18 * Math.sin(timeSec * s.twinkleSpeed + s.twinklePhase);
+          // Subtle twinkling opacity
+          const twinkle = 0.72 + 0.28 * Math.sin(timeSec * s.twinkleSpeed + s.phase);
+          // Fade smoothly when wrapping at far or near boundary
+          const edgeFade = Math.min(1.0, relZ / 75.0) * Math.min(1.0, (STAR_SPAN_Z - relZ) / 90.0);
 
-          const r = s.baseRadius * depthFactor * twinkle;
-          const L = s.rayLength * depthFactor * twinkle;
-          const waist = r * (s.isHero ? 0.34 : 0.42);
-
-          // 8-vertex 4-point star polygon centered at (0,0)
-          const pts = [
-            `0,${(-L).toFixed(2)}`,
-            `${waist.toFixed(2)},${(-waist).toFixed(2)}`,
-            `${L.toFixed(2)},0`,
-            `${waist.toFixed(2)},${waist.toFixed(2)}`,
-            `0,${L.toFixed(2)}`,
-            `${(-waist).toFixed(2)},${waist.toFixed(2)}`,
-            `${(-L).toFixed(2)},0`,
-            `${(-waist).toFixed(2)},${(-waist).toFixed(2)}`
-          ].join(" ");
-
-          s.fourPoint.setAttribute("points", pts);
-          s.centerCircle.setAttribute("r", r.toFixed(2));
-          s.g.setAttribute("transform", `translate(${proj.x.toFixed(2)}, ${proj.y.toFixed(2)})`);
+          s.el.setAttribute(
+            "transform",
+            `translate(${proj.x.toFixed(2)}, ${proj.y.toFixed(2)}) scale(${perspectiveScale.toFixed(3)})`
+          );
+          s.el.setAttribute("opacity", (twinkle * edgeFade).toFixed(3));
         }
       }
 
       // =========================================================================
       // 4. 3D OUTRUN RETRO SUN WITH HORIZONTAL SCANLINE CUTOUTS
       // =========================================================================
-      // Sun placed in 3D coordinates far beyond the terrain horizon so it grows subtly as camera moves
+      // Sun placed 3.5x further back in 3D Z with proportionally scaled radius & Y
+      // so initial apparent screen size matches the reference while growing much more slowly
+      const SUN_SCALE_FACTOR = 3.5;
       const SUN_WORLD_X = 0;
-      const SUN_WORLD_Y = 64;
-      const SUN_START_Z = 1450;
-      const SUN_WORLD_RADIUS = 560;
+      const SUN_WORLD_Y = 16.5 + (64 - 16.5) * SUN_SCALE_FACTOR; // Preserves exact initial horizon elevation
+      const SUN_START_Z = 1450 * SUN_SCALE_FACTOR; // 5075 world units deep
+      const SUN_WORLD_RADIUS = 560 * SUN_SCALE_FACTOR; // 1960 world units radius
 
       // Pre-create SVG <rect> elements inside #sun-stripes-clip
       const NUM_SUN_BANDS = 11;
@@ -422,187 +437,224 @@
       }
 
       function updateSun() {
-        // Slowly approach the 3D sun (looping smoothly over a very long distance so growth is gentle)
-        const sunTravel = (camera.z * 0.18) % 360;
+        // Slowly approach the distant 3D sun so apparent growth is very subtle
+        const sunTravel = (camera.z * 0.18) % (360 * SUN_SCALE_FACTOR);
         const sunWorldZ = SUN_START_Z - sunTravel;
 
         const projCenter = project3D(SUN_WORLD_X, SUN_WORLD_Y, sunWorldZ);
         if (!projCenter) return;
 
-        const screenR = SUN_WORLD_RADIUS * projCenter.scale;
+        // Compute apparent 2D screen radius from 3D world radius
+        const screenRadius = SUN_WORLD_RADIUS * projCenter.scale;
         const cx = projCenter.x;
         const cy = projCenter.y;
 
         sunHalo.setAttribute("cx", cx.toFixed(2));
         sunHalo.setAttribute("cy", cy.toFixed(2));
-        sunHalo.setAttribute("r", (screenR * 1.03).toFixed(2));
+        sunHalo.setAttribute("r", (screenRadius * 1.03).toFixed(2));
 
         sunDisc.setAttribute("cx", cx.toFixed(2));
         sunDisc.setAttribute("cy", cy.toFixed(2));
-        sunDisc.setAttribute("r", screenR.toFixed(2));
+        sunDisc.setAttribute("r", screenRadius.toFixed(2));
 
-        // Update horizontal scanline bands in screen coordinates relative to projected sun
-        const topY = cy - screenR;
-        const diameter = screenR * 2;
+        // Update 3D-scaled horizontal scanline bands in the sun's clipPath
+        // Top ~52% is solid, lower ~48% has progressively wider horizontal gaps
+        const sunTop = cy - screenRadius;
+        const sunDiam = screenRadius * 2;
 
-        // Normalized vertical slices [yStart, yEnd] mimicking the reference scanlines
-        // Solid bands get thinner toward bottom while cutouts get wider
+        // Normalized vertical slices [yStartNorm, yEndNorm] matching the retro sun silhouette
         const bands = [
           [0.00, 0.135],
-          [0.155, 0.275],
-          [0.300, 0.410],
-          [0.440, 0.540],
-          [0.575, 0.665],
-          [0.705, 0.785],
-          [0.830, 0.895],
-          [0.942, 1.000]
+          [0.145, 0.225],
+          [0.240, 0.315],
+          [0.335, 0.405],
+          [0.430, 0.495],
+          [0.525, 0.585],
+          [0.620, 0.675],
+          [0.715, 0.765],
+          [0.810, 0.855],
+          [0.900, 0.940],
+          [0.975, 1.000]
         ];
 
         for (let i = 0; i < NUM_SUN_BANDS; i++) {
+          const [y0, y1] = bands[i];
           const rect = clipRects[i];
-          if (i < bands.length) {
-            const [t0, t1] = bands[i];
-            const y = topY + t0 * diameter;
-            const h = Math.max(0.5, (t1 - t0) * diameter);
-            rect.setAttribute("x", (cx - screenR - 10).toFixed(2));
-            rect.setAttribute("y", y.toFixed(2));
-            rect.setAttribute("width", (diameter + 20).toFixed(2));
-            rect.setAttribute("height", h.toFixed(2));
-          } else {
-            rect.setAttribute("width", "0");
-            rect.setAttribute("height", "0");
-          }
+          rect.setAttribute("x", (cx - screenRadius - 10).toFixed(2));
+          rect.setAttribute("width", (sunDiam + 20).toFixed(2));
+          rect.setAttribute("y", (sunTop + y0 * sunDiam).toFixed(2));
+          rect.setAttribute("height", Math.max(0.5, (y1 - y0) * sunDiam).toFixed(2));
         }
       }
 
       // =========================================================================
       // 5. 3D WIREFRAME TERRAIN & CHECKERBOARD VALLEY (SVG POLYGONS)
       // =========================================================================
-      const COLS = 36; // Number of grid cells across X (37 vertices per row)
+      const COLS = 84; // Doubled horizontal tile density & wider span extending well past screen edges
       const ROWS = 38; // Number of grid rows along Z
-      const CELL_W = 8.2; // World X spacing per column
+      const CELL_W = 4.2; // Finer horizontal tile width (~2x checker tiles visible per row)
       const CELL_D = 8.5; // World Z spacing per row
       const Z_NEAR_OFFSET = 6.0; // Closest visible row ahead of camera
 
       // Pre-allocate SVG <polygon> pool (painted back-to-front via DOM order)
-      const totalQuads = COLS * ROWS;
-      const quadPolygons = new Array(totalQuads);
-
-      // Populate DOM in back-to-front order: far rows (r = ROWS - 1) first, near rows (r = 0) last
-      for (let r = ROWS - 1; r >= 0; r--) {
-        for (let c = 0; c < COLS; c++) {
-          const poly = document.createElementNS(SVG_NS, "polygon");
-          poly.setAttribute("stroke-linejoin", "round");
-          terrainLayer.appendChild(poly);
-          quadPolygons[r * COLS + c] = poly;
+      const cellPolygons = [];
+      (function initTerrainPolygons() {
+        // Create from furthest row (ROWS - 1) down to nearest row (0) for painter's algorithm occlusion
+        for (let r = ROWS - 1; r >= 0; r--) {
+          const rowArr = [];
+          for (let c = 0; c < COLS; c++) {
+            const poly = document.createElementNS(SVG_NS, "polygon");
+            poly.setAttribute("stroke-linejoin", "round");
+            terrainLayer.appendChild(poly);
+            rowArr.push(poly);
+          }
+          cellPolygons[r] = rowArr;
         }
-      }
-
-      // Reusable 2D projection vertex grid buffer: (ROWS + 1) x (COLS + 1)
-      const vertGrid = Array.from({ length: ROWS + 1 }, () => new Array(COLS + 1));
+      })();
 
       /**
-       * Interpolates wireframe stroke color and polygon fill color based on normalized depth t:
-       * t = 0.0 -> nearest to camera (bright neon pink-magenta #ff9ef5)
-       * t = 0.45 -> mid-ground (electric violet-purple #a86eff)
-       * t = 1.0 -> distant horizon (cool ice-blue / periwinkle #7da8ff)
+       * Interpolates RGB color smoothly between two [r, g, b] arrays
        */
-      function getDepthColors(normZ, avgHeight) {
-        // Clamp t to [0, 1]
-        const t = Math.max(0, Math.min(1, normZ));
-
-        let r, g, b;
-        if (t < 0.48) {
-          // Near -> Mid: Neon Pink-White (#ffb3f6) -> Electric Violet (#9f6bff)
-          const k = t / 0.48;
-          r = Math.round(255 + (159 - 255) * k);
-          g = Math.round(179 + (107 - 179) * k);
-          b = Math.round(246 + (255 - 246) * k);
-        } else {
-          // Mid -> Horizon: Electric Violet (#9f6bff) -> Ice Blue (#8cb8ff)
-          const k = (t - 0.48) / 0.52;
-          r = Math.round(159 + (140 - 159) * k);
-          g = Math.round(107 + (184 - 107) * k);
-          b = 255;
-        }
-
-        // Slightly brighten wireframe edges on elevated mountain peaks for crisp definition
-        const peakBoost = Math.min(35, avgHeight * 1.1);
-        r = Math.min(255, Math.round(r + peakBoost * 0.6));
-        g = Math.min(255, Math.round(g + peakBoost * 0.75));
-        b = Math.min(255, Math.round(b + peakBoost));
-
-        const stroke = `rgb(${r},${g},${b})`;
-
-        // Polygon interior fill: deep midnight black in foreground, subtly luminous indigo on distant mountains
-        const hillGlow = Math.min(1.0, avgHeight / 28.0);
-        const fillR = Math.round(4 + t * 14 + hillGlow * 14);
-        const fillG = Math.round(3 + t * 16 + hillGlow * 18);
-        const fillB = Math.round(12 + t * 38 + hillGlow * 46);
-        const fill = `rgb(${fillR},${fillG},${fillB})`;
-
-        return { stroke, fill };
+      function lerpColor(c1, c2, t) {
+        const clamped = Math.max(0, Math.min(1, t));
+        const r = Math.round(c1[0] + (c2[0] - c1[0]) * clamped);
+        const g = Math.round(c1[1] + (c2[1] - c1[1]) * clamped);
+        const b = Math.round(c1[2] + (c2[2] - c1[2]) * clamped);
+        return `rgb(${r},${g},${b})`;
       }
 
-      function updateTerrain() {
-        // Snap base Z to integer grid steps so vertices stay anchored in world space while camera glides smoothly
-        const baseGridIndex = Math.floor((camera.z + Z_NEAR_OFFSET) / CELL_D);
-        const halfCols = COLS / 2;
-        const maxZDist = ROWS * CELL_D;
+      // Color stops for depth-based wireframe stroke & terrain fill
+      // Near camera: bright neon magenta-pink (#ff73e6) -> Mid: violet-indigo (#7a68ee) -> Far horizon: ice-cyan-blue (#a4d4ff)
+      const STROKE_NEAR = [255, 118, 232];
+      const STROKE_MID = [116, 112, 238];
+      const STROKE_FAR = [174, 214, 255];
 
-        // 1. Project all (ROWS + 1) x (COLS + 1) grid vertices
+      const FILL_VALLEY_NEAR = [6, 5, 16];
+      const FILL_VALLEY_FAR = [38, 62, 128];
+
+      const FILL_MTN_NEAR = [12, 10, 28];
+      const FILL_MTN_FAR = [46, 72, 142];
+
+      function updateTerrain() {
+        // Snap world Z grid index to camera.z so terrain vertices stay anchored in world space
+        const baseRowIndex = Math.floor((camera.z + Z_NEAR_OFFSET) / CELL_D);
+        const halfCols = COLS / 2;
+
+        // Precompute projected vertex grid: (ROWS + 1) x (COLS + 1)
+        const gridPts = new Array(ROWS + 1);
+        const gridHeights = new Array(ROWS + 1);
+
         for (let r = 0; r <= ROWS; r++) {
-          const wz = (baseGridIndex + r) * CELL_D;
+          const rowIndex = baseRowIndex + r;
+          const wz = rowIndex * CELL_D;
+          const rowPts = new Array(COLS + 1);
+          const rowH = new Array(COLS + 1);
 
           for (let c = 0; c <= COLS; c++) {
             const wx = (c - halfCols) * CELL_W;
             const wy = getTerrainHeight(wx, wz);
-            const proj = project3D(wx, wy, wz);
-
-            vertGrid[r][c] = proj ? { x: proj.x, y: proj.y, z: proj.z, h: wy } : null;
+            rowH[c] = wy;
+            rowPts[c] = project3D(wx, wy, wz);
           }
+
+          gridPts[r] = rowPts;
+          gridHeights[r] = rowH;
         }
 
-        // 2. Update each SVG <polygon> quad back-to-front
-        for (let r = ROWS - 1; r >= 0; r--) {
+        // Update each SVG <polygon> quad from projected 3D corners
+        const maxDist = ROWS * CELL_D;
+
+        for (let r = 0; r < ROWS; r++) {
+          const rowIndex = baseRowIndex + r;
+          const rowZ = rowIndex * CELL_D;
+          const relZ = Math.max(0, rowZ - camera.z);
+          // Normalized depth: 0.0 at camera, 1.0 at far horizon
+          const normZ = Math.min(1.0, relZ / maxDist);
+
+          // Compute depth-dependent wireframe line color
+          let strokeColor;
+          if (normZ < 0.45) {
+            strokeColor = lerpColor(STROKE_NEAR, STROKE_MID, normZ / 0.45);
+          } else {
+            strokeColor = lerpColor(STROKE_MID, STROKE_FAR, (normZ - 0.45) / 0.55);
+          }
+
+          const rowPolys = cellPolygons[r];
+          const ptsNear = gridPts[r];
+          const ptsFar = gridPts[r + 1];
+          const hNear = gridHeights[r];
+          const hFar = gridHeights[r + 1];
+
           for (let c = 0; c < COLS; c++) {
-            const poly = quadPolygons[r * COLS + c];
+            const poly = rowPolys[c];
+            const p00 = ptsNear[c];     // near-left
+            const p10 = ptsNear[c + 1]; // near-right
+            const p11 = ptsFar[c + 1];  // far-right
+            const p01 = ptsFar[c];      // far-left
 
-            const v00 = vertGrid[r][c];
-            const v10 = vertGrid[r][c + 1];
-            const v11 = vertGrid[r + 1][c + 1];
-            const v01 = vertGrid[r + 1][c];
-
-            if (!v00 || !v10 || !v11 || !v01) {
-              poly.setAttribute("display", "none");
+            if (!p00 || !p10 || !p11 || !p01) {
+              poly.setAttribute("visibility", "hidden");
               continue;
             }
 
-            // Frustum cull quads completely outside horizontal screen bounds
-            const minX = Math.min(v00.x, v10.x, v11.x, v01.x);
-            const maxX = Math.max(v00.x, v10.x, v11.x, v01.x);
+            // Frustum cull quads completely outside horizontal viewport bounds
+            const minX = Math.min(p00.x, p10.x, p11.x, p01.x);
+            const maxX = Math.max(p00.x, p10.x, p11.x, p01.x);
             if (maxX < -60 || minX > VIEW_W + 60) {
-              poly.setAttribute("display", "none");
+              poly.setAttribute("visibility", "hidden");
               continue;
             }
 
-            poly.removeAttribute("display");
+            poly.setAttribute("visibility", "visible");
 
-            // Quad polygon points in clockwise order
+            // Polygon vertex coordinates string
             const pointsStr =
-              `${v00.x.toFixed(1)},${v00.y.toFixed(1)} ` +
-              `${v10.x.toFixed(1)},${v10.y.toFixed(1)} ` +
-              `${v11.x.toFixed(1)},${v11.y.toFixed(1)} ` +
-              `${v01.x.toFixed(1)},${v01.y.toFixed(1)}`;
+              `${p00.x.toFixed(1)},${p00.y.toFixed(1)} ` +
+              `${p10.x.toFixed(1)},${p10.y.toFixed(1)} ` +
+              `${p11.x.toFixed(1)},${p11.y.toFixed(1)} ` +
+              `${p01.x.toFixed(1)},${p01.y.toFixed(1)}`;
 
-            const avgZ = (v00.z + v10.z + v11.z + v01.z) * 0.25;
-            const avgH = (v00.h + v10.h + v11.h + v01.h) * 0.25;
-            const normZ = (avgZ - Z_NEAR_OFFSET) / maxZDist;
+            // Average elevation of the quad determines mountain shading vs flat checkerboard floor
+            const avgH = (hNear[c] + hNear[c + 1] + hFar[c + 1] + hFar[c]) * 0.25;
+            const isMountain = avgH > 0.35;
 
-            const { stroke, fill } = getDepthColors(normZ, avgH);
+            // Subtle alternating checkerboard tint in the valley + elevation-based ridge shading on mountains
+            const isCheckerAlt = ((rowIndex + c) & 1) === 0;
+            let fill;
+            let stroke = strokeColor;
+
+            if (isMountain) {
+              // Mountain facets occlude the sun & stars behind them with deep indigo-blue atmospheric fill
+              const elevFactor = Math.min(1.0, avgH / 34.0);
+              const baseFill = lerpColor(FILL_MTN_NEAR, FILL_MTN_FAR, Math.pow(normZ, 1.35));
+              // Slightly brighten higher ridges
+              if (elevFactor > 0.25 && normZ > 0.25) {
+                fill = lerpColor(
+                  [22, 28, 64],
+                  [78, 118, 198],
+                  Math.min(1.0, normZ * 0.8 + elevFactor * 0.35)
+                );
+              } else {
+                fill = baseFill;
+              }
+              // Mountain wireframe shifts slightly cooler blue-white than the foreground road
+              stroke = lerpColor(
+                [175, 125, 235],
+                [195, 224, 255],
+                Math.min(1.0, normZ * 0.85 + elevFactor * 0.25)
+              );
+            } else {
+              // Flat valley floor checkerboard polygons
+              const valleyBase = lerpColor(FILL_VALLEY_NEAR, FILL_VALLEY_FAR, Math.pow(normZ, 1.85));
+              if (isCheckerAlt && normZ < 0.72) {
+                fill = lerpColor([11, 9, 26], [36, 56, 115], Math.pow(normZ, 1.7));
+              } else {
+                fill = valleyBase;
+              }
+            }
 
             // Stroke width tapers smoothly with distance so horizon lines stay delicate and sharp
-            const strokeW = Math.max(0.55, 2.35 * (1.0 - normZ * 0.76));
+            const strokeW = Math.max(0.45, 1.85 * (1.0 - normZ * 0.76));
 
             poly.setAttribute("points", pointsStr);
             poly.setAttribute("fill", fill);
