@@ -139,791 +139,672 @@
       <!-- Layer 4: Subtle horizon mist behind mountains -->
       <rect x="0" y="320" width="1200" height="320" fill="url(#valley-horizon-glow)" pointer-events="none" />
 
-      <!-- Layer 5: 3D Wireframe Terrain & Checkerboard Valley (SVG Polygons) -->
-      <g id="layer-terrain"></g>
-
-      <!-- Layer 6: 3D Winding Undulating Highway (SVG Polygons & Lines) -->
-      <g id="layer-road"></g>
+      <!-- Layer 5: Unified Back-to-Front 3D Terrain & Roadway Depth Slices (SVG Polygons) -->
+      <g id="layer-world"></g>
     </svg>
   </div>
 
   <script>
-    /**
-     * Pure SVG + Vanilla JavaScript 3D Synthwave Outrun Renderer
-     * Renders 3D stars (circle over 4-point star), 3D receding/approaching sun with scanlines,
-     * an infinite procedural 3D wireframe terrain mesh built from SVG <polygon> elements,
-     * and an undulating, twisting 3D highway with teal center dashes and yellow edge lines.
-     */
     (function () {
       const SVG_NS = "http://www.w3.org/2000/svg";
-
-      // Viewport / Virtual 2D Projection Center
       const VIEW_W = 1200;
       const VIEW_H = 900;
-      const CX = VIEW_W / 2;
-      const CY = 515; // Horizon line vertical position
-      const FOV = 540; // Perspective focal length
+      const FOCAL_LENGTH = 560;
 
-      // Camera configuration (moves forward along +Z, tracking the roadway closely)
-      const CAMERA_ROAD_CLEARANCE = 7.2; // Lowered camera height closer to the roadway surface
+      // Camera state: lowered closer to the roadway surface and advancing slowly toward the horizon
+      const CAMERA_ROAD_CLEARANCE = 7.2;
       const camera = {
         x: 0,
         y: CAMERA_ROAD_CLEARANCE,
         z: 0,
-        speed: 14.0 // Slow, smooth forward cruise speed toward the horizon
+        speed: 14.0
       };
 
       // DOM Layer references
       const starsLayer = document.getElementById("layer-stars");
-      const terrainLayer = document.getElementById("layer-terrain");
-      const roadLayer = document.getElementById("layer-road");
+      const worldLayer = document.getElementById("layer-world");
       const sunHalo = document.getElementById("sun-halo");
       const sunDisc = document.getElementById("sun-disc");
       const sunClip = document.getElementById("sun-stripes-clip");
 
       // =========================================================================
-      // 1. DETERMINISTIC SEEDED RANDOM & LAYERED NOISE FOR MOUNTAIN HEIGHTMAP
+      // 1. DETERMINISTIC SEEDED RANDOM, NOISE & WINDING ROAD PATH
       // =========================================================================
-      function hash2D(ix, iz) {
-        let n = Math.sin(ix * 127.1 + iz * 311.7) * 43758.5453123;
+      function hash2D(x, y) {
+        const n = Math.sin(x * 127.1 + y * 311.7) * 43758.5453123;
         return n - Math.floor(n);
       }
 
-      function smoothNoise(x, z) {
+      function smoothNoise(x, y) {
         const ix = Math.floor(x);
-        const iz = Math.floor(z);
+        const iy = Math.floor(y);
         const fx = x - ix;
-        const fz = z - iz;
-
-        // Smooth Hermite interpolation
+        const fy = y - iy;
         const ux = fx * fx * (3.0 - 2.0 * fx);
-        const uz = fz * fz * (3.0 - 2.0 * fz);
+        const uy = fy * fy * (3.0 - 2.0 * fy);
 
-        const a = hash2D(ix, iz);
-        const b = hash2D(ix + 1, iz);
-        const c = hash2D(ix, iz + 1);
-        const d = hash2D(ix + 1, iz + 1);
+        const a = hash2D(ix, iy);
+        const b = hash2D(ix + 1, iy);
+        const c = hash2D(ix, iy + 1);
+        const d = hash2D(ix + 1, iy + 1);
 
-        return a + (b - a) * ux + (c - a) * uz + (a - b - c + d) * ux * uz;
+        return a + (b - a) * ux + (c - a) * uy + (a - b - c + d) * ux * uy;
       }
 
-      // Multi-octave fractal noise + sharp ridge noise for crisp 80s wireframe peaks
-      function fractalMountainNoise(x, z) {
-        let value = 0.0;
-        let amp = 0.55;
-        let freq = 0.16;
-
+      function fractalMountainNoise(wx, wz) {
+        let total = 0;
+        let amp = 0.56;
+        let freq = 0.042;
         for (let i = 0; i < 4; i++) {
-          const n = smoothNoise(x * freq + i * 19.3, z * freq + i * 7.7);
-          // Ridged transformation creates crisp synthwave mountain ridges
-          const ridge = 1.0 - Math.abs(n * 2.0 - 1.0);
-          value += (n * 0.55 + ridge * ridge * 0.45) * amp;
+          total += smoothNoise(wx * freq + i * 19.3, wz * freq - i * 11.7) * amp;
           freq *= 2.08;
           amp *= 0.48;
         }
-        return value;
+        return total;
       }
 
-      // =========================================================================
-      // 1B. WINDING & UNDULATING 3D ROADWAY PATH DEFINITION
-      // =========================================================================
+      // Winding, undulating 3D roadway path (twists left/right and rises/dips smoothly)
       const ROAD_HALF_WIDTH = 6.2;
 
-      /**
-       * Computes the 3D centerline X, elevation Y, and subtle banking angle of the
-       * winding, undulating highway at any world Z coordinate.
-       */
       function getRoadPathAtZ(wz) {
-        // Gentle start near z = 0, ramping smoothly into sweeping S-curves & hills
-        const startBlend = Math.min(1.0, Math.max(0.0, (wz - 14.0) / 55.0));
-        const smoothBlend = startBlend * startBlend * (3.0 - 2.0 * startBlend);
+        // Gentle straight start near z = 0, ramping smoothly into wide S-curves and rolling hills
+        const introFactor = Math.min(1.0, Math.max(0.0, (wz - 12.0) / 85.0));
+        const smoothIntro = introFactor * introFactor * (3.0 - 2.0 * introFactor);
 
-        // Multi-frequency horizontal S-curves
-        const curveX =
-          smoothBlend *
+        // Horizontal twists & turns
+        const x =
+          smoothIntro *
           (24.0 * Math.sin(wz * 0.0115) +
-            11.5 * Math.sin(wz * 0.025 + 1.1) +
-            4.5 * Math.cos(wz * 0.043 - 0.5));
+            11.5 * Math.sin(wz * 0.025 + 0.85));
 
-        // Derivative dX/dZ for subtle road banking into turns
-        const dXdZ =
-          smoothBlend *
+        // Vertical rolling hills (up and down)
+        const y =
+          smoothIntro *
+          (6.5 * Math.sin(wz * 0.0145 - 0.35) +
+            3.2 * Math.cos(wz * 0.031 + 0.6) +
+            4.2);
+
+        // Subtle banking into turns based on lateral derivative
+        const dxDz =
+          smoothIntro *
           (24.0 * 0.0115 * Math.cos(wz * 0.0115) +
-            11.5 * 0.025 * Math.cos(wz * 0.025 + 1.1) -
-            4.5 * 0.043 * Math.sin(wz * 0.043 - 0.5));
+            11.5 * 0.025 * Math.cos(wz * 0.025 + 0.85));
+        const bank = Math.max(-0.18, Math.min(0.18, -dxDz * 0.28));
 
-        // Smooth rolling hills and dips along the highway
-        const hillBlend = Math.min(1.0, Math.max(0.0, (wz - 10.0) / 48.0));
-        const smoothHill = hillBlend * hillBlend * (3.0 - 2.0 * hillBlend);
-        const rawY =
-          smoothHill *
-          (4.6 * Math.sin(wz * 0.016 - 0.35) +
-            2.4 * Math.sin(wz * 0.034 + 0.9) +
-            3.8);
-
-        return {
-          x: curveX,
-          y: Math.max(0.25, rawY),
-          bank: Math.max(-0.22, Math.min(0.22, -dXdZ * 0.32))
-        };
+        return { x, y, bank };
       }
 
       /**
        * Computes static terrain elevation Y at world (x, z) independent of camera position.
-       * Central valley corridor follows the winding road path so mountains flank the road,
-       * initial rows near z = 0 are flat, and twin mountain ranges rise toward the horizon.
+       * Keeps the initial foreground rows completely flat at the road level and rises
+       * smoothly into twin mountain ridges toward the horizon, routing around the road.
        */
       function computeStaticTerrainHeight(wx, wz) {
-        const roadCenter = getRoadPathAtZ(wz);
-        const absX = Math.abs(wx - roadCenter.x);
+        const road = getRoadPathAtZ(wz);
+        const roadBaseY = road.y;
 
-        // Flat central valley corridor following the winding road (half-width ~ 17.5 world units)
-        const valleyHalfWidth = 17.5;
-        if (absX <= valleyHalfWidth) {
-          return 0.0;
+        // Initial rows closest to the camera at start are completely flat at road level
+        const flatStartDistance = 95.0;
+        if (wz <= flatStartDistance) {
+          return roadBaseY;
         }
 
-        // Initial rows near the starting camera (z < 95) are completely flat,
-        // then rise smoothly into full mountain ranges toward the horizon
-        const flatStartZ = 95.0;
-        if (wz <= flatStartZ) {
-          return 0.0;
+        // Smooth ramp-up from flat foreground into hills/mountains toward the horizon
+        const riseRamp = Math.min(1.0, (wz - flatStartDistance) / 260.0);
+        const smoothRise = riseRamp * riseRamp * (3.0 - 2.0 * riseRamp);
+
+        // Keep a smooth valley corridor around the winding roadway so the road sits flush
+        const distFromRoad = Math.abs(wx - road.x);
+        const corridorInner = ROAD_HALF_WIDTH * 1.15;
+        const corridorOuter = ROAD_HALF_WIDTH * 4.2 + smoothRise * 16.0;
+        let corridorFactor = 0.0;
+        if (distFromRoad > corridorInner) {
+          const t = Math.min(1.0, (distFromRoad - corridorInner) / Math.max(1.0, corridorOuter - corridorInner));
+          corridorFactor = t * t * (3.0 - 2.0 * t);
         }
 
-        const riseRamp = Math.min(1.0, (wz - flatStartZ) / 145.0);
-        const zElevationFactor = riseRamp * riseRamp * (3.0 - 2.0 * riseRamp);
+        // Twin mountain ridges flanking the winding valley further downrange
+        const ridgeCenterDist = 54.0 + smoothNoise(wz * 0.008, 3.1) * 26.0;
+        const distFromRidge = Math.abs(distFromRoad - ridgeCenterDist);
+        const ridgeEnvelope = Math.exp(-(distFromRidge * distFromRidge) / (2.0 * 38.0 * 38.0));
 
-        // Smooth ramp outside the central valley
-        const distFromRoad = absX - valleyHalfWidth;
-        const ramp = Math.min(1.0, distFromRoad / 36.0);
-        const smoothRamp = ramp * ramp * (3.0 - 2.0 * ramp);
+        const n = fractalMountainNoise(wx, wz);
+        const peakSculpt = Math.pow(Math.max(0.0, n), 1.35);
 
-        // Create prominent flanking mountain ridges near the valley edge, tapering further out
-        const ridgeEnvelope = Math.exp(-Math.pow((distFromRoad - 38.0) / 85.0, 2.0)) * 0.78 + 0.34;
+        const mountainLift =
+          smoothRise *
+          corridorFactor *
+          (14.0 + ridgeEnvelope * 54.0) *
+          (0.35 + peakSculpt * 1.35);
 
-        // Combine multi-octave random noise + slight jagged vertex jitter
-        const baseNoise = fractalMountainNoise(wx, wz);
-        const microJitter = (hash2D(Math.round(wx * 0.5), Math.round(wz * 0.5)) - 0.5) * 0.14;
+        // Subtle rolling undulation outside the immediate road bed
+        const rollingHills =
+          smoothRise *
+          corridorFactor *
+          (n - 0.35) *
+          11.0;
 
-        // Macro z-modulation so mountain clusters vary naturally along the flight path
-        const clusterMod = 0.68 + 0.52 * smoothNoise(wx * 0.03 + 4.1, wz * 0.045);
-
-        const maxPeakHeight = 48.0;
-        const height =
-          smoothRamp *
-          zElevationFactor *
-          ridgeEnvelope *
-          clusterMod *
-          (baseNoise + microJitter) *
-          maxPeakHeight;
-
-        return Math.max(0.0, height);
+        return roadBaseY + mountainLift + rollingHills;
       }
 
       // =========================================================================
       // 2. 3D PERSPECTIVE PROJECTION HELPER
       // =========================================================================
       function project3D(wx, wy, wz) {
-        const dz = wz - camera.z;
-        if (dz <= 0.5) return null;
-
-        const scale = FOV / dz;
-        const sx = CX + (wx - camera.x) * scale;
-        const sy = CY - (wy - camera.y) * scale;
-        return { x: sx, y: sy, scale: scale, dz: dz };
+        const relZ = wz - camera.z;
+        if (relZ <= 1.2) {
+          return null;
+        }
+        const scale = FOCAL_LENGTH / relZ;
+        const sx = VIEW_W * 0.5 + (wx - camera.x) * scale;
+        const sy = VIEW_H * 0.56 - (wy - camera.y) * scale;
+        return { x: sx, y: sy, scale: scale, z: relZ };
       }
 
       // =========================================================================
-      // 3. 3D PARALLAX STARFIELD (SVG CIRCLE OVER 4-POINT STAR)
+      // 3. 3D PARALLAX STARFIELD (CIRCLE OVER A FOUR-POINT STAR)
       // =========================================================================
-      const NUM_STARS = 190;
-      const STAR_DEPTH_MIN = 180;
-      const STAR_DEPTH_MAX = 1150;
-      const STAR_SPAN_Z = STAR_DEPTH_MAX - STAR_DEPTH_MIN;
+      const STAR_COUNT = 190;
+      const STAR_Z_MIN = 320;
+      const STAR_Z_MAX = 1550;
       const stars = [];
 
-      /**
-       * Builds SVG polygon points for a crisp 4-point star centered at (0,0)
-       */
-      function buildFourPointStarPoints(outerR, innerR) {
-        const pts = [];
-        for (let i = 0; i < 8; i++) {
-          const angle = (i * Math.PI) / 4;
-          const r = i % 2 === 0 ? outerR : innerR;
-          pts.push(`${(Math.cos(angle) * r).toFixed(2)},${(Math.sin(angle) * r).toFixed(2)}`);
-        }
-        return pts.join(" ");
+      function buildFourPointStarPath(rOuter, rInner) {
+        return (
+          `M 0 ${-rOuter} ` +
+          `Q 0 0 ${rInner} ${-rInner} ` +
+          `L ${rOuter} 0 ` +
+          `Q 0 0 ${rInner} ${rInner} ` +
+          `L 0 ${rOuter} ` +
+          `Q 0 0 ${-rInner} ${rInner} ` +
+          `L ${-rOuter} 0 ` +
+          `Q 0 0 ${-rInner} ${-rInner} Z`
+        );
       }
 
-      (function initStars() {
-        for (let i = 0; i < NUM_STARS; i++) {
-          const z = STAR_DEPTH_MIN + hash2D(i, 1.3) * STAR_SPAN_Z;
-          // Distribute stars across a wide sky dome above the horizon
-          const spreadX = (z / FOV) * (VIEW_W * 0.72);
-          const wx = (hash2D(i, 7.9) * 2.0 - 1.0) * spreadX;
+      function initStars() {
+        for (let i = 0; i < STAR_COUNT; i++) {
+          const isHeroStar = i < 16;
+          const wz = STAR_Z_MIN + hash2D(i, 1.3) * (STAR_Z_MAX - STAR_Z_MIN);
+          const spreadX = (wz / FOCAL_LENGTH) * (VIEW_W * 0.62);
+          const wx = (hash2D(i, 2.7) * 2.0 - 1.0) * spreadX;
 
-          const minSkyY = (z / FOV) * 18;
-          const maxSkyY = (z / FOV) * (CY * 1.12);
-          const wy = camera.y + minSkyY + Math.pow(hash2D(i, 13.7), 0.72) * (maxSkyY - minSkyY);
+          const minY = 12;
+          const maxY = (wz / FOCAL_LENGTH) * (VIEW_H * 0.54);
+          const wy = minY + hash2D(i, 3.9) * Math.max(40, maxY - minY);
 
-          // Determine if this star is one of the larger bright sparkle stars
-          const isSparkleHero = hash2D(i, 29.1) > 0.92;
-          const baseRadius = isSparkleHero
-            ? 1.55 + hash2D(i, 31.4) * 0.9
-            : 0.65 + hash2D(i, 31.4) * 0.85;
+          const baseOuterR = isHeroStar
+            ? 8.5 + hash2D(i, 4.1) * 7.5
+            : 2.3 + hash2D(i, 4.1) * 3.1;
+          const baseInnerR = baseOuterR * 0.22;
+          const coreCircleR = isHeroStar ? baseOuterR * 0.22 : baseOuterR * 0.34;
 
-          // Star tint matching magenta-left / blue-right sky ambiance
           let starColor = "#ffffff";
-          let spikeColor = "#dbe8ff";
-          if (isSparkleHero) {
-            if (wx < -30) {
-              starColor = "#ffd6f5";
-              spikeColor = "#ff7be5";
+          let coreColor = "#ffffff";
+          if (isHeroStar) {
+            if (wx < 0) {
+              starColor = "#ff7ad9";
+              coreColor = "#ffe6fa";
             } else {
-              starColor = "#d9eeff";
-              spikeColor = "#6bb5ff";
+              starColor = "#6bb5ff";
+              coreColor = "#e8f4ff";
             }
-          } else if (hash2D(i, 41.9) > 0.72) {
-            starColor = wx < 0 ? "#f8c8ea" : "#bcd8ff";
-            spikeColor = starColor;
+          } else if (hash2D(i, 5.5) > 0.72) {
+            starColor = wx < 0 ? "#f7b5e6" : "#b8daff";
           }
 
-          // Group container positioned via 3D projection
           const g = document.createElementNS(SVG_NS, "g");
-          if (isSparkleHero) {
+          if (isHeroStar) {
             g.setAttribute("filter", "url(#star-glow)");
           }
 
-          // 1) Four-point star underneath
-          const fourPoint = document.createElementNS(SVG_NS, "polygon");
-          const outerSpike = isSparkleHero ? baseRadius * 4.4 : baseRadius * 2.5;
-          const innerWaist = isSparkleHero ? baseRadius * 0.58 : baseRadius * 0.48;
-          fourPoint.setAttribute("points", buildFourPointStarPoints(outerSpike, innerWaist));
-          fourPoint.setAttribute("fill", spikeColor);
-          fourPoint.setAttribute("opacity", isSparkleHero ? "0.92" : "0.72");
+          const fourPoint = document.createElementNS(SVG_NS, "path");
+          fourPoint.setAttribute("d", buildFourPointStarPath(baseOuterR, baseInnerR));
+          fourPoint.setAttribute("fill", starColor);
+          fourPoint.setAttribute("opacity", isHeroStar ? "0.95" : "0.78");
 
-          // 2) SVG circle centered directly over the four-point star
-          const coreCircle = document.createElementNS(SVG_NS, "circle");
-          coreCircle.setAttribute("cx", "0");
-          coreCircle.setAttribute("cy", "0");
-          coreCircle.setAttribute("r", baseRadius.toFixed(2));
-          coreCircle.setAttribute("fill", starColor);
+          const circle = document.createElementNS(SVG_NS, "circle");
+          circle.setAttribute("cx", "0");
+          circle.setAttribute("cy", "0");
+          circle.setAttribute("r", coreCircleR.toFixed(2));
+          circle.setAttribute("fill", coreColor);
 
           g.appendChild(fourPoint);
-          g.appendChild(coreCircle);
+          g.appendChild(circle);
           starsLayer.appendChild(g);
 
           stars.push({
             el: g,
             wx: wx,
             wy: wy,
-            baseZ: z,
-            phase: hash2D(i, 53.1) * Math.PI * 2,
-            twinkleSpeed: 1.4 + hash2D(i, 67.3) * 2.4,
-            isHero: isSparkleHero
+            wz: wz,
+            twinklePhase: hash2D(i, 6.8) * Math.PI * 2,
+            twinkleSpeed: 1.4 + hash2D(i, 7.2) * 2.2,
+            isHero: isHeroStar
           });
         }
-      })();
+      }
 
       function updateStars(timeSec) {
-        // Stars move slowly in 3D space so they drift gently closer as the camera advances
-        const starParallaxZ = camera.z * 0.45;
+        const starCamZ = camera.z * 0.14;
+        const starSpan = STAR_Z_MAX - STAR_Z_MIN;
 
         for (let i = 0; i < stars.length; i++) {
           const s = stars[i];
-          // Wrap star depth seamlessly within [STAR_DEPTH_MIN, STAR_DEPTH_MAX]
-          let relZ = (s.baseZ - starParallaxZ - STAR_DEPTH_MIN) % STAR_SPAN_Z;
-          if (relZ < 0) relZ += STAR_SPAN_Z;
-          const worldZ = camera.z + STAR_DEPTH_MIN + relZ;
-
-          const proj = project3D(s.wx, s.wy, worldZ);
-          if (!proj) {
-            s.el.setAttribute("opacity", "0");
-            continue;
+          let relZ = s.wz - starCamZ;
+          while (relZ < STAR_Z_MIN) {
+            relZ += starSpan;
+          }
+          while (relZ > STAR_Z_MAX) {
+            relZ -= starSpan;
           }
 
-          // Scale star slightly based on its 3D depth
-          const depthRatio = 1.0 - relZ / STAR_SPAN_Z; // 0 far -> 1 near
-          const perspectiveScale = 0.52 + depthRatio * 0.85;
+          const scale = FOCAL_LENGTH / relZ;
+          const sx = VIEW_W * 0.5 + (s.wx - camera.x * 0.18) * scale;
+          const sy = VIEW_H * 0.56 - (s.wy - camera.y * 0.12) * scale;
 
-          // Subtle twinkling opacity
-          const twinkle = 0.72 + 0.28 * Math.sin(timeSec * s.twinkleSpeed + s.phase);
-          // Fade smoothly when wrapping at far or near boundary
-          const edgeFade = Math.min(1.0, relZ / 75.0) * Math.min(1.0, (STAR_SPAN_Z - relZ) / 90.0);
+          const sizeFactor = Math.max(0.45, Math.min(2.1, scale * 1.35));
+          const twinkle = 0.72 + 0.28 * Math.sin(timeSec * s.twinkleSpeed + s.twinklePhase);
 
           s.el.setAttribute(
             "transform",
-            `translate(${proj.x.toFixed(2)}, ${proj.y.toFixed(2)}) scale(${perspectiveScale.toFixed(3)})`
+            `translate(${sx.toFixed(2)}, ${sy.toFixed(2)}) scale(${sizeFactor.toFixed(3)})`
           );
-          s.el.setAttribute("opacity", (twinkle * edgeFade).toFixed(3));
+          s.el.setAttribute("opacity", twinkle.toFixed(2));
         }
       }
 
       // =========================================================================
-      // 4. 3D OUTRUN RETRO SUN WITH HORIZONTAL SCANLINE CUTOUTS
+      // 4. 3D PROJECTED RETRO OUTRUN SUN WITH SCANLINE CUTOUTS
       // =========================================================================
-      // Sun placed 3.5x further back in 3D Z with proportionally scaled radius & Y
-      // so initial apparent screen size matches the reference while growing much more slowly
-      const SUN_SCALE_FACTOR = 3.5;
-      const SUN_WORLD_X = 0;
-      const SUN_WORLD_Y = 7.2 + (58 - 7.2) * SUN_SCALE_FACTOR; // Aligned with lowered camera horizon
-      const SUN_START_Z = 1450 * SUN_SCALE_FACTOR; // 5075 world units deep
-      const SUN_WORLD_RADIUS = 560 * SUN_SCALE_FACTOR; // 1960 world units radius
+      const SUN_START_Z = 5075.0;
+      const SUN_WORLD_X = 0.0;
+      const SUN_WORLD_Y = 238.0;
+      const SUN_WORLD_RADIUS = 1960.0;
+      const SUN_STRIPE_COUNT = 8;
 
-      // Pre-create SVG <rect> elements inside #sun-stripes-clip
-      const NUM_SUN_BANDS = 11;
-      const clipRects = [];
-      for (let i = 0; i < NUM_SUN_BANDS; i++) {
+      const sunClipRects = [];
+      for (let i = 0; i < SUN_STRIPE_COUNT; i++) {
         const rect = document.createElementNS(SVG_NS, "rect");
         sunClip.appendChild(rect);
-        clipRects.push(rect);
+        sunClipRects.push(rect);
       }
 
       function updateSun() {
-        // Slowly approach the distant 3D sun so apparent growth is very subtle
-        const sunTravel = (camera.z * 0.18) % (360 * SUN_SCALE_FACTOR);
-        const sunWorldZ = SUN_START_Z - sunTravel;
+        const sunCamZ = camera.z * 0.35;
+        const relZ = Math.max(1200.0, SUN_START_Z - sunCamZ);
+        const scale = FOCAL_LENGTH / relZ;
 
-        const projCenter = project3D(SUN_WORLD_X, SUN_WORLD_Y, sunWorldZ);
-        if (!projCenter) return;
+        const screenX = VIEW_W * 0.5 + (SUN_WORLD_X - camera.x * 0.25) * scale;
+        const screenY = VIEW_H * 0.56 - (SUN_WORLD_Y - camera.y * 0.25) * scale;
+        const screenR = SUN_WORLD_RADIUS * scale;
 
-        // Compute apparent 2D screen radius from 3D world radius
-        const screenRadius = SUN_WORLD_RADIUS * projCenter.scale;
-        const cx = projCenter.x;
-        const cy = projCenter.y;
+        sunHalo.setAttribute("cx", screenX.toFixed(2));
+        sunHalo.setAttribute("cy", screenY.toFixed(2));
+        sunHalo.setAttribute("r", (screenR * 1.05).toFixed(2));
 
-        sunHalo.setAttribute("cx", cx.toFixed(2));
-        sunHalo.setAttribute("cy", cy.toFixed(2));
-        sunHalo.setAttribute("r", (screenRadius * 1.03).toFixed(2));
+        sunDisc.setAttribute("cx", screenX.toFixed(2));
+        sunDisc.setAttribute("cy", screenY.toFixed(2));
+        sunDisc.setAttribute("r", screenR.toFixed(2));
 
-        sunDisc.setAttribute("cx", cx.toFixed(2));
-        sunDisc.setAttribute("cy", cy.toFixed(2));
-        sunDisc.setAttribute("r", screenRadius.toFixed(2));
+        const topY = screenY - screenR;
+        const diameter = screenR * 2.0;
+        const bandStep = diameter / SUN_STRIPE_COUNT;
 
-        // Update 3D-scaled horizontal scanline bands in the sun's clipPath
-        // Top ~52% is solid, lower ~48% has progressively wider horizontal gaps
-        const sunTop = cy - screenRadius;
-        const sunDiam = screenRadius * 2;
+        for (let i = 0; i < SUN_STRIPE_COUNT; i++) {
+          const t = i / (SUN_STRIPE_COUNT - 1);
+          const gapFraction = 0.04 + Math.pow(t, 1.35) * 0.26;
+          const gapHeight = bandStep * gapFraction;
+          const sliceY = topY + i * bandStep;
+          const sliceH = Math.max(1.0, bandStep - gapHeight);
 
-        // Normalized vertical slices [yStartNorm, yEndNorm] matching the retro sun silhouette
-        const bands = [
-          [0.00, 0.135],
-          [0.145, 0.225],
-          [0.240, 0.315],
-          [0.335, 0.405],
-          [0.430, 0.495],
-          [0.525, 0.585],
-          [0.620, 0.675],
-          [0.715, 0.765],
-          [0.810, 0.855],
-          [0.900, 0.940],
-          [0.975, 1.000]
-        ];
-
-        for (let i = 0; i < NUM_SUN_BANDS; i++) {
-          const [y0, y1] = bands[i];
-          const rect = clipRects[i];
-          rect.setAttribute("x", (cx - screenRadius - 10).toFixed(2));
-          rect.setAttribute("width", (sunDiam + 20).toFixed(2));
-          rect.setAttribute("y", (sunTop + y0 * sunDiam).toFixed(2));
-          rect.setAttribute("height", Math.max(0.5, (y1 - y0) * sunDiam).toFixed(2));
+          const rect = sunClipRects[i];
+          rect.setAttribute("x", (screenX - screenR - 10).toFixed(2));
+          rect.setAttribute("y", sliceY.toFixed(2));
+          rect.setAttribute("width", (diameter + 20).toFixed(2));
+          rect.setAttribute("height", sliceH.toFixed(2));
         }
       }
 
       // =========================================================================
-      // 5. 3D WIREFRAME TERRAIN & CHECKERBOARD VALLEY (SVG POLYGONS)
+      // 5. UNIFIED BACK-TO-FRONT 3D TERRAIN & ROADWAY DEPTH SLICES (SVG POLYGONS)
       // =========================================================================
-      const COLS = 84; // Doubled horizontal tile density & wider span extending well past screen edges
-      const ROWS = 52; // Increased visible row depth for extended horizon detail
-      const CELL_W = 4.2; // Finer horizontal tile width (~2x checker tiles visible per row)
-      const CELL_D = 7.0; // Finer Z row spacing for denser terrain data points
-      const Z_NEAR_OFFSET = 6.0; // Closest visible row ahead of camera
+      const COLS = 84;
+      const ROWS = 52;
+      const CELL_W = 4.2;
+      const CELL_D = 7.0;
+      const TOTAL_HEIGHTMAP_ROWS = 480;
 
-      // Precompute a large static world heightmap dataset before execution
-      // so terrain elevations are completely independent of camera position
-      const PRECOMPUTED_TOTAL_ROWS = 480; // Covers 3,360 world units of precomputed terrain rows
-      const precomputedHeightMap = new Array(PRECOMPUTED_TOTAL_ROWS);
-      (function buildPrecomputedTerrain() {
-        const halfCols = COLS / 2;
-        for (let r = 0; r < PRECOMPUTED_TOTAL_ROWS; r++) {
-          const wz = r * CELL_D;
-          const rowHeights = new Float32Array(COLS + 1);
-          for (let c = 0; c <= COLS; c++) {
-            const wx = (c - halfCols) * CELL_W;
-            rowHeights[c] = computeStaticTerrainHeight(wx, wz);
-          }
-          precomputedHeightMap[r] = rowHeights;
+      // Precomputed static elevation table (independent of camera position)
+      const precomputedHeightMap = new Array(TOTAL_HEIGHTMAP_ROWS);
+      for (let r = 0; r < TOTAL_HEIGHTMAP_ROWS; r++) {
+        const wz = r * CELL_D;
+        const rowHeights = new Float32Array(COLS + 1);
+        for (let c = 0; c <= COLS; c++) {
+          const wx = (c - COLS * 0.5) * CELL_W;
+          rowHeights[c] = computeStaticTerrainHeight(wx, wz);
         }
-      })();
-
-      function getPrecomputedRowHeights(rowIndex) {
-        if (rowIndex < 0) {
-          return precomputedHeightMap[0];
-        }
-        if (rowIndex < PRECOMPUTED_TOTAL_ROWS) {
-          return precomputedHeightMap[rowIndex];
-        }
-        // Seamless wrap into the mountainous region if camera travels past precomputed buffer
-        const loopStart = 60;
-        const loopSpan = PRECOMPUTED_TOTAL_ROWS - loopStart;
-        const wrappedIdx = loopStart + ((rowIndex - loopStart) % loopSpan);
-        return precomputedHeightMap[wrappedIdx];
+        precomputedHeightMap[r] = rowHeights;
       }
 
-      // Pre-allocate SVG <polygon> pool (painted back-to-front via DOM order)
-      const cellPolygons = [];
-      (function initTerrainPolygons() {
-        // Create from furthest row (ROWS - 1) down to nearest row (0) for painter's algorithm occlusion
-        for (let r = ROWS - 1; r >= 0; r--) {
-          const rowArr = [];
-          for (let c = 0; c < COLS; c++) {
-            const poly = document.createElementNS(SVG_NS, "polygon");
-            poly.setAttribute("stroke-linejoin", "round");
-            terrainLayer.appendChild(poly);
-            rowArr.push(poly);
-          }
-          cellPolygons[r] = rowArr;
-        }
-      })();
+      // Reusable pool of depth-slice groups rendered back-to-front
+      const depthSlices = [];
+      for (let r = 0; r < ROWS; r++) {
+        const sliceGroup = document.createElementNS(SVG_NS, "g");
+        const terrainGroup = document.createElementNS(SVG_NS, "g");
+        const roadGroup = document.createElementNS(SVG_NS, "g");
+        sliceGroup.appendChild(terrainGroup);
+        sliceGroup.appendChild(roadGroup);
+        worldLayer.appendChild(sliceGroup);
 
-      /**
-       * Interpolates RGB color smoothly between two [r, g, b] arrays
-       */
-      function lerpColor(c1, c2, t) {
-        const clamped = Math.max(0, Math.min(1, t));
-        const r = Math.round(c1[0] + (c2[0] - c1[0]) * clamped);
-        const g = Math.round(c1[1] + (c2[1] - c1[1]) * clamped);
-        const b = Math.round(c1[2] + (c2[2] - c1[2]) * clamped);
-        return `rgb(${r},${g},${b})`;
+        const terrainPolys = [];
+        for (let c = 0; c < COLS; c++) {
+          const poly = document.createElementNS(SVG_NS, "polygon");
+          terrainGroup.appendChild(poly);
+          terrainPolys.push(poly);
+        }
+
+        const roadDeckPoly = document.createElementNS(SVG_NS, "polygon");
+        const roadLeftRailPoly = document.createElementNS(SVG_NS, "polygon");
+        const roadRightRailPoly = document.createElementNS(SVG_NS, "polygon");
+        const roadLeftYellowLine = document.createElementNS(SVG_NS, "polygon");
+        const roadRightYellowLine = document.createElementNS(SVG_NS, "polygon");
+        const roadCenterTealLine = document.createElementNS(SVG_NS, "polygon");
+
+        roadGroup.appendChild(roadDeckPoly);
+        roadGroup.appendChild(roadLeftRailPoly);
+        roadGroup.appendChild(roadRightRailPoly);
+        roadGroup.appendChild(roadLeftYellowLine);
+        roadGroup.appendChild(roadRightYellowLine);
+        roadGroup.appendChild(roadCenterTealLine);
+
+        depthSlices.push({
+          group: sliceGroup,
+          terrainPolys: terrainPolys,
+          roadDeckPoly: roadDeckPoly,
+          roadLeftRailPoly: roadLeftRailPoly,
+          roadRightRailPoly: roadRightRailPoly,
+          roadLeftYellowLine: roadLeftYellowLine,
+          roadRightYellowLine: roadRightYellowLine,
+          roadCenterTealLine: roadCenterTealLine
+        });
       }
 
-      // Color stops for depth-based wireframe stroke & terrain fill
-      // Near camera: bright neon magenta-pink (#ff73e6) -> Mid: violet-indigo (#7a68ee) -> Far horizon: ice-cyan-blue (#a4d4ff)
-      const STROKE_NEAR = [255, 118, 232];
-      const STROKE_MID = [116, 112, 238];
-      const STROKE_FAR = [174, 214, 255];
-
-      const FILL_VALLEY_NEAR = [0, 0, 0];
-      const FILL_VALLEY_ALT_NEAR = [4, 4, 10];
-      const FILL_VALLEY_FAR = [72, 120, 204];
-
-      const FILL_MTN_NEAR = [0, 0, 0];
-      const FILL_MTN_FAR = [62, 104, 188];
-      const FILL_MTN_PEAK_FAR = [98, 148, 228];
-
-      function updateTerrain() {
-        // Snap world Z grid index to camera.z so terrain vertices stay anchored in world space
-        const baseRowIndex = Math.floor((camera.z + Z_NEAR_OFFSET) / CELL_D);
-        const halfCols = COLS / 2;
-
-        // Precompute projected vertex grid: (ROWS + 1) x (COLS + 1)
-        const gridPts = new Array(ROWS + 1);
-        const gridHeights = new Array(ROWS + 1);
-
-        for (let r = 0; r <= ROWS; r++) {
-          const rowIndex = baseRowIndex + r;
-          const wz = rowIndex * CELL_D;
-          const rowPts = new Array(COLS + 1);
-          const rowH = getPrecomputedRowHeights(rowIndex);
-
-          for (let c = 0; c <= COLS; c++) {
-            const wx = (c - halfCols) * CELL_W;
-            const wy = rowH[c];
-            rowPts[c] = project3D(wx, wy, wz);
-          }
-
-          gridPts[r] = rowPts;
-          gridHeights[r] = rowH;
-        }
-
-        // Update each SVG <polygon> quad from projected 3D corners
-        const maxDist = ROWS * CELL_D;
-
-        for (let r = 0; r < ROWS; r++) {
-          const rowIndex = baseRowIndex + r;
-          const rowZ = rowIndex * CELL_D;
-          const relZ = Math.max(0, rowZ - camera.z);
-          // Normalized depth: 0.0 at camera, 1.0 at far horizon
-          const normZ = Math.min(1.0, relZ / maxDist);
-
-          // Compute depth-dependent wireframe line color
-          let strokeColor;
-          if (normZ < 0.45) {
-            strokeColor = lerpColor(STROKE_NEAR, STROKE_MID, normZ / 0.45);
-          } else {
-            strokeColor = lerpColor(STROKE_MID, STROKE_FAR, (normZ - 0.45) / 0.55);
-          }
-
-          const rowPolys = cellPolygons[r];
-          const ptsNear = gridPts[r];
-          const ptsFar = gridPts[r + 1];
-          const hNear = gridHeights[r];
-          const hFar = gridHeights[r + 1];
-
-          for (let c = 0; c < COLS; c++) {
-            const poly = rowPolys[c];
-            const p00 = ptsNear[c];     // near-left
-            const p10 = ptsNear[c + 1]; // near-right
-            const p11 = ptsFar[c + 1];  // far-right
-            const p01 = ptsFar[c];      // far-left
-
-            if (!p00 || !p10 || !p11 || !p01) {
-              poly.setAttribute("visibility", "hidden");
-              continue;
-            }
-
-            // Frustum cull quads completely outside horizontal viewport bounds
-            const minX = Math.min(p00.x, p10.x, p11.x, p01.x);
-            const maxX = Math.max(p00.x, p10.x, p11.x, p01.x);
-            if (maxX < -60 || minX > VIEW_W + 60) {
-              poly.setAttribute("visibility", "hidden");
-              continue;
-            }
-
-            poly.setAttribute("visibility", "visible");
-
-            // Polygon vertex coordinates string
-            const pointsStr =
-              `${p00.x.toFixed(1)},${p00.y.toFixed(1)} ` +
-              `${p10.x.toFixed(1)},${p10.y.toFixed(1)} ` +
-              `${p11.x.toFixed(1)},${p11.y.toFixed(1)} ` +
-              `${p01.x.toFixed(1)},${p01.y.toFixed(1)}`;
-
-            // Average elevation of the quad determines mountain shading vs flat checkerboard floor
-            const avgH = (hNear[c] + hNear[c + 1] + hFar[c + 1] + hFar[c]) * 0.25;
-            const isMountain = avgH > 0.35;
-
-            // Subtle alternating checkerboard tint in the valley + elevation-based ridge shading on mountains
-            const isCheckerAlt = ((rowIndex + c) & 1) === 0;
-            let fill;
-            let stroke = strokeColor;
-
-            // Smooth depth interpolation factor: 0.0 (pure black near camera) -> 1.0 (blue at horizon)
-            const depthFillT = Math.pow(normZ, 1.35);
-
-            if (isMountain) {
-              // Mountain facets smoothly interpolate from pure black near the camera to atmospheric blue at the horizon
-              const elevFactor = Math.min(1.0, avgH / 34.0);
-              const farMtnColor = [
-                Math.round(FILL_MTN_FAR[0] + (FILL_MTN_PEAK_FAR[0] - FILL_MTN_FAR[0]) * elevFactor),
-                Math.round(FILL_MTN_FAR[1] + (FILL_MTN_PEAK_FAR[1] - FILL_MTN_FAR[1]) * elevFactor),
-                Math.round(FILL_MTN_FAR[2] + (FILL_MTN_PEAK_FAR[2] - FILL_MTN_FAR[2]) * elevFactor)
-              ];
-              fill = lerpColor(FILL_MTN_NEAR, farMtnColor, depthFillT);
-
-              // Mountain wireframe shifts slightly cooler blue-white than the foreground road
-              stroke = lerpColor(
-                [175, 125, 235],
-                [195, 224, 255],
-                Math.min(1.0, normZ * 0.85 + elevFactor * 0.25)
-              );
-            } else {
-              // Flat valley floor checkerboard polygons interpolate smoothly from black to horizon blue
-              const nearColor = isCheckerAlt ? FILL_VALLEY_ALT_NEAR : FILL_VALLEY_NEAR;
-              fill = lerpColor(nearColor, FILL_VALLEY_FAR, depthFillT);
-            }
-
-            // Stroke width tapers smoothly with distance so horizon lines stay delicate and sharp
-            const strokeW = Math.max(0.45, 1.85 * (1.0 - normZ * 0.76));
-
-            poly.setAttribute("points", pointsStr);
-            poly.setAttribute("fill", fill);
-            poly.setAttribute("stroke", stroke);
-            poly.setAttribute("stroke-width", strokeW.toFixed(2));
-          }
-        }
+      function lerp(a, b, t) {
+        return a + (b - a) * t;
       }
 
-      // =========================================================================
-      // 6. MAIN ANIMATION LOOP
-      // =========================================================================
-      // 6. 3D WINDING & UNDULATING ROADWAY RENDERER (SVG POLYGONS)
-      // =========================================================================
-      const ROAD_SEGMENTS = 96; // High subdivision along Z for smooth curves & crests
-      const ROAD_SEG_D = 3.8;   // Segment depth in world units (~365 units total visible road)
-      const ROAD_NEAR_OFFSET = 2.0;
-
-      // Color interpolation stops for the roadway (fading to lighter hues toward the horizon)
-      const ROAD_DECK_NEAR = [8, 7, 22];
-      const ROAD_DECK_FAR = [112, 148, 226];
-
-      const ROAD_SIDE_NEAR = [255, 218, 42];     // Vivid yellow side lines near camera
-      const ROAD_SIDE_FAR = [255, 252, 205];     // Soft pale pastel yellow at horizon
-
-      const ROAD_CENTER_NEAR = [18, 232, 222];   // Crisp teal center dashes near camera
-      const ROAD_CENTER_FAR = [208, 255, 252];   // Light aqua-white at horizon
-
-      const ROAD_SIDEWALL_NEAR = [18, 14, 46];
-      const ROAD_SIDEWALL_FAR = [132, 168, 240];
-
-      const roadSegmentElements = [];
-      (function initRoadSegments() {
-        // Build back-to-front for proper painter's algorithm occlusion over hills/dips
-        for (let i = ROAD_SEGMENTS - 1; i >= 0; i--) {
-          const g = document.createElementNS(SVG_NS, "g");
-
-          // Elevated bridge side-girder (visible when road rises above valley floor)
-          const leftWall = document.createElementNS(SVG_NS, "polygon");
-          const rightWall = document.createElementNS(SVG_NS, "polygon");
-
-          // Main asphalt road surface quad
-          const deck = document.createElementNS(SVG_NS, "polygon");
-          deck.setAttribute("stroke-linejoin", "round");
-
-          // Left & right yellow edge stripes (rendered as crisp perspective quads)
-          const leftStripe = document.createElementNS(SVG_NS, "polygon");
-          const rightStripe = document.createElementNS(SVG_NS, "polygon");
-
-          // Center teal dashed lane line
-          const centerDash = document.createElementNS(SVG_NS, "polygon");
-
-          g.appendChild(leftWall);
-          g.appendChild(rightWall);
-          g.appendChild(deck);
-          g.appendChild(leftStripe);
-          g.appendChild(rightStripe);
-          g.appendChild(centerDash);
-          roadLayer.appendChild(g);
-
-          roadSegmentElements[i] = {
-            group: g,
-            leftWall: leftWall,
-            rightWall: rightWall,
-            deck: deck,
-            leftStripe: leftStripe,
-            rightStripe: rightStripe,
-            centerDash: centerDash
-          };
-        }
-      })();
-
-      function quadPointsStr(p00, p10, p11, p01) {
-        return (
-          `${p00.x.toFixed(1)},${p00.y.toFixed(1)} ` +
-          `${p10.x.toFixed(1)},${p10.y.toFixed(1)} ` +
-          `${p11.x.toFixed(1)},${p11.y.toFixed(1)} ` +
-          `${p01.x.toFixed(1)},${p01.y.toFixed(1)}`
-        );
+      function lerpRgb(c1, c2, t) {
+        const clamped = Math.max(0.0, Math.min(1.0, t));
+        const r = Math.round(lerp(c1[0], c2[0], clamped));
+        const g = Math.round(lerp(c1[1], c2[1], clamped));
+        const b = Math.round(lerp(c1[2], c2[2], clamped));
+        return `rgb(${r}, ${g}, ${b})`;
       }
 
-      function updateRoadway() {
-        const baseSegIdx = Math.floor((camera.z + ROAD_NEAR_OFFSET) / ROAD_SEG_D);
-        const totalRoadDist = ROAD_SEGMENTS * ROAD_SEG_D;
+      function formatPoints(pts) {
+        return pts.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+      }
 
-        // Pre-sample cross-section vertices for (ROAD_SEGMENTS + 1) stations
-        const stations = new Array(ROAD_SEGMENTS + 1);
-        for (let i = 0; i <= ROAD_SEGMENTS; i++) {
-          const segIdx = baseSegIdx + i;
-          const wz = segIdx * ROAD_SEG_D;
-          const path = getRoadPathAtZ(wz);
+      function samplePrecomputedHeight(colIdx, worldRowFloat) {
+        const clampedRow = Math.max(0.0, Math.min(TOTAL_HEIGHTMAP_ROWS - 1.001, worldRowFloat));
+        const r0 = Math.floor(clampedRow);
+        const r1 = Math.min(TOTAL_HEIGHTMAP_ROWS - 1, r0 + 1);
+        const frac = clampedRow - r0;
+        const h0 = precomputedHeightMap[r0][colIdx];
+        const h1 = precomputedHeightMap[r1][colIdx];
+        return h0 + (h1 - h0) * frac;
+      }
 
-          // Cross-section offsets for outer edges, yellow side lines, and teal center line
-          const wOuter = ROAD_HALF_WIDTH;
-          const wStripeOuter = ROAD_HALF_WIDTH - 0.35;
-          const wStripeInner = ROAD_HALF_WIDTH - 0.78;
-          const wCenterHalf = 0.24;
+      function updateWorld() {
+        const baseRowFloat = Math.max(0.0, camera.z / CELL_D);
+        const startRowInt = Math.floor(baseRowFloat);
+        const rowFrac = baseRowFloat - startRowInt;
 
-          const cosB = Math.cos(path.bank);
-          const sinB = Math.sin(path.bank);
+        // Render from farthest slice (i = ROWS - 1) to nearest slice (i = 0)
+        for (let i = ROWS - 1; i >= 0; i--) {
+          const slice = depthSlices[i];
+          const relRowStart = i - rowFrac;
+          const relRowEnd = relRowStart + 1.0;
 
-          const sampleAtOffset = (dx) => {
-            const wx = path.x + dx * cosB;
-            const wy = path.y + dx * sinB;
-            return project3D(wx, wy, wz);
-          };
+          const worldRow0 = startRowInt + relRowStart;
+          const worldRow1 = startRowInt + relRowEnd;
 
-          stations[i] = {
-            segIdx: segIdx,
-            wz: wz,
-            pathY: path.y,
-            outerL: sampleAtOffset(-wOuter),
-            outerR: sampleAtOffset(wOuter),
-            stripeLO: sampleAtOffset(-wStripeOuter),
-            stripeLI: sampleAtOffset(-wStripeInner),
-            stripeRO: sampleAtOffset(wStripeOuter),
-            stripeRI: sampleAtOffset(wStripeInner),
-            centerL: sampleAtOffset(-wCenterHalf),
-            centerR: sampleAtOffset(wCenterHalf),
-            baseL: project3D(path.x - wOuter * cosB, Math.max(0, path.y - 1.45), wz),
-            baseR: project3D(path.x + wOuter * cosB, Math.max(0, path.y - 1.45), wz)
-          };
-        }
-
-        for (let i = 0; i < ROAD_SEGMENTS; i++) {
-          const el = roadSegmentElements[i];
-          const s0 = stations[i];
-          const s1 = stations[i + 1];
-
-          if (!s0.outerL || !s0.outerR || !s1.outerL || !s1.outerR) {
-            el.group.setAttribute("visibility", "hidden");
+          if (worldRow1 <= 0.05 || worldRow0 >= TOTAL_HEIGHTMAP_ROWS - 1) {
+            slice.group.setAttribute("display", "none");
             continue;
           }
 
-          el.group.setAttribute("visibility", "visible");
+          slice.group.setAttribute("display", "inline");
 
-          const relZ = Math.max(0, s0.wz - camera.z);
-          const normZ = Math.min(1.0, relZ / totalRoadDist);
-          // Smooth easing so colors brighten gracefully toward the horizon
-          const fadeT = Math.pow(normZ, 0.88);
+          const wz0 = Math.max(0.1, worldRow0 * CELL_D);
+          const wz1 = Math.max(wz0 + 0.1, worldRow1 * CELL_D);
+          const wzMid = (wz0 + wz1) * 0.5;
 
-          const deckFill = lerpColor(ROAD_DECK_NEAR, ROAD_DECK_FAR, fadeT);
-          const sideColor = lerpColor(ROAD_SIDE_NEAR, ROAD_SIDE_FAR, fadeT);
-          const centerColor = lerpColor(ROAD_CENTER_NEAR, ROAD_CENTER_FAR, fadeT);
-          const wallColor = lerpColor(ROAD_SIDEWALL_NEAR, ROAD_SIDEWALL_FAR, fadeT);
+          // Depth factor: 0 near camera, 1 toward horizon
+          const depthT = Math.max(0.0, Math.min(1.0, i / (ROWS - 1)));
+          const horizonFade = Math.pow(depthT, 1.45);
 
-          // Main road asphalt surface
-          el.deck.setAttribute("points", quadPointsStr(s0.outerL, s0.outerR, s1.outerR, s1.outerL));
-          el.deck.setAttribute("fill", deckFill);
-          el.deck.setAttribute("stroke", deckFill);
-          el.deck.setAttribute("stroke-width", "0.6");
+          // -------------------------------------------------------------------
+          // A. TERRAIN POLYGONS FOR THIS DEPTH SLICE
+          // -------------------------------------------------------------------
+          for (let c = 0; c < COLS; c++) {
+            const poly = slice.terrainPolys[c];
+            const wxLeft = (c - COLS * 0.5) * CELL_W;
+            const wxRight = wxLeft + CELL_W;
 
-          // Subtle elevated road girder sidewalls
-          if (s0.baseL && s1.baseL && s0.baseR && s1.baseR && s0.pathY > 0.65) {
-            el.leftWall.setAttribute("visibility", "visible");
-            el.leftWall.setAttribute("points", quadPointsStr(s0.baseL, s0.outerL, s1.outerL, s1.baseL));
-            el.leftWall.setAttribute("fill", wallColor);
+            const wy00 = samplePrecomputedHeight(c, worldRow0);
+            const wy10 = samplePrecomputedHeight(c + 1, worldRow0);
+            const wy11 = samplePrecomputedHeight(c + 1, worldRow1);
+            const wy01 = samplePrecomputedHeight(c, worldRow1);
 
-            el.rightWall.setAttribute("visibility", "visible");
-            el.rightWall.setAttribute("points", quadPointsStr(s0.outerR, s0.baseR, s1.baseR, s1.outerR));
-            el.rightWall.setAttribute("fill", wallColor);
-          } else {
-            el.leftWall.setAttribute("visibility", "hidden");
-            el.rightWall.setAttribute("visibility", "hidden");
+            const p00 = project3D(wxLeft, wy00, wz0);
+            const p10 = project3D(wxRight, wy10, wz0);
+            const p11 = project3D(wxRight, wy11, wz1);
+            const p01 = project3D(wxLeft, wy01, wz1);
+
+            if (!p00 || !p10 || !p11 || !p01) {
+              poly.setAttribute("display", "none");
+              continue;
+            }
+
+            poly.setAttribute("display", "inline");
+            poly.setAttribute("points", formatPoints([p00, p10, p11, p01]));
+
+            const avgY = (wy00 + wy10 + wy11 + wy01) * 0.25;
+            const roadAtMid = getRoadPathAtZ(wzMid);
+            const heightAboveRoad = Math.max(0.0, avgY - roadAtMid.y);
+            const isMountain = heightAboveRoad > 1.25;
+
+            const checkerParity = (c + Math.floor(worldRow0)) & 1;
+
+            // Smooth fill interpolation from pure black near camera to blue toward horizon
+            let fillColor;
+            if (isMountain) {
+              const mountainFactor = Math.min(1.0, heightAboveRoad / 36.0);
+              const farMountainBlue = [
+                lerp(42, 112, mountainFactor),
+                lerp(76, 152, mountainFactor),
+                lerp(156, 224, mountainFactor)
+              ];
+              const midMountainTint = [
+                lerp(14, 54, mountainFactor),
+                lerp(24, 84, mountainFactor),
+                lerp(56, 148, mountainFactor)
+              ];
+              const fillMix =
+                depthT < 0.55
+                  ? lerpRgb([0, 0, 0], midMountainTint, depthT / 0.55)
+                  : lerpRgb(midMountainTint, farMountainBlue, (depthT - 0.55) / 0.45);
+              fillColor = fillMix;
+            } else {
+              const farTileBlue = checkerParity === 0 ? [58, 102, 184] : [76, 124, 206];
+              const midTileBlue = checkerParity === 0 ? [12, 22, 52] : [20, 36, 78];
+              fillColor =
+                depthT < 0.6
+                  ? lerpRgb([0, 0, 0], midTileBlue, depthT / 0.6)
+                  : lerpRgb(midTileBlue, farTileBlue, (depthT - 0.6) / 0.4);
+            }
+
+            // Grid line color transitions smoothly from neon magenta/pink near camera to electric blue/periwinkle
+            let strokeColor;
+            let strokeWidth;
+            if (isMountain) {
+              strokeColor = lerpRgb([138, 156, 232], [176, 206, 255], horizonFade);
+              strokeWidth = lerp(1.35, 0.65, horizonFade);
+            } else {
+              const nearPink = [255, 118, 226];
+              const midVioletBlue = [144, 134, 245];
+              const farSkyBlue = [132, 184, 255];
+
+              if (depthT < 0.45) {
+                strokeColor = lerpRgb(nearPink, midVioletBlue, depthT / 0.45);
+              } else {
+                strokeColor = lerpRgb(midVioletBlue, farSkyBlue, (depthT - 0.45) / 0.55);
+              }
+              strokeWidth = lerp(2.1, 0.72, horizonFade);
+            }
+
+            poly.setAttribute("fill", fillColor);
+            poly.setAttribute("stroke", strokeColor);
+            poly.setAttribute("stroke-width", strokeWidth.toFixed(2));
+            poly.setAttribute("stroke-linejoin", "round");
           }
 
-          // Left & right continuous yellow edge lines fading lighter toward horizon
-          if (s0.stripeLO && s0.stripeLI && s1.stripeLI && s1.stripeLO) {
-            el.leftStripe.setAttribute("visibility", "visible");
-            el.leftStripe.setAttribute("points", quadPointsStr(s0.stripeLO, s0.stripeLI, s1.stripeLI, s1.stripeLO));
-            el.leftStripe.setAttribute("fill", sideColor);
-          } else {
-            el.leftStripe.setAttribute("visibility", "hidden");
+          // -------------------------------------------------------------------
+          // B. WINDING 3D ROADWAY SEGMENT FOR THIS DEPTH SLICE
+          // -------------------------------------------------------------------
+          const road0 = getRoadPathAtZ(wz0);
+          const road1 = getRoadPathAtZ(wz1);
+
+          // Road surface sits flush with terrain elevation at road center
+          const surfaceOffset = 0.08;
+          const railDrop = 1.15;
+
+          const r0LeftX = road0.x - ROAD_HALF_WIDTH;
+          const r0RightX = road0.x + ROAD_HALF_WIDTH;
+          const r1LeftX = road1.x - ROAD_HALF_WIDTH;
+          const r1RightX = road1.x + ROAD_HALF_WIDTH;
+
+          const r0Y = road0.y + surfaceOffset;
+          const r1Y = road1.y + surfaceOffset;
+
+          const rd00 = project3D(r0LeftX, r0Y, wz0);
+          const rd10 = project3D(r0RightX, r0Y, wz0);
+          const rd11 = project3D(r1RightX, r1Y, wz1);
+          const rd01 = project3D(r1LeftX, r1Y, wz1);
+
+          if (!rd00 || !rd10 || !rd11 || !rd01) {
+            slice.roadDeckPoly.setAttribute("display", "none");
+            slice.roadLeftRailPoly.setAttribute("display", "none");
+            slice.roadRightRailPoly.setAttribute("display", "none");
+            slice.roadLeftYellowLine.setAttribute("display", "none");
+            slice.roadRightYellowLine.setAttribute("display", "none");
+            slice.roadCenterTealLine.setAttribute("display", "none");
+            continue;
           }
 
-          if (s0.stripeRI && s0.stripeRO && s1.stripeRO && s1.stripeRI) {
-            el.rightStripe.setAttribute("visibility", "visible");
-            el.rightStripe.setAttribute("points", quadPointsStr(s0.stripeRI, s0.stripeRO, s1.stripeRO, s1.stripeRI));
-            el.rightStripe.setAttribute("fill", sideColor);
+          // Asphalt deck: dark near camera, fading to lighter slate-blue toward horizon
+          const asphaltColor = lerpRgb([16, 14, 28], [138, 168, 214], horizonFade);
+          const asphaltEdgeStroke = lerpRgb([52, 42, 86], [174, 202, 238], horizonFade);
+
+          slice.roadDeckPoly.setAttribute("display", "inline");
+          slice.roadDeckPoly.setAttribute("points", formatPoints([rd00, rd10, rd11, rd01]));
+          slice.roadDeckPoly.setAttribute("fill", asphaltColor);
+          slice.roadDeckPoly.setAttribute("stroke", asphaltEdgeStroke);
+          slice.roadDeckPoly.setAttribute("stroke-width", lerp(1.1, 0.5, horizonFade).toFixed(2));
+          slice.roadDeckPoly.setAttribute("stroke-linejoin", "round");
+
+          // Left & right side curb/guardrail skirts fading lighter toward horizon
+          const rl00 = project3D(r0LeftX, r0Y, wz0);
+          const rl10 = project3D(r0LeftX, r0Y - railDrop, wz0);
+          const rl11 = project3D(r1LeftX, r1Y - railDrop, wz1);
+          const rl01 = project3D(r1LeftX, r1Y, wz1);
+
+          const rr00 = project3D(r0RightX, r0Y, wz0);
+          const rr10 = project3D(r0RightX, r0Y - railDrop, wz0);
+          const rr11 = project3D(r1RightX, r1Y - railDrop, wz1);
+          const rr01 = project3D(r1RightX, r1Y, wz1);
+
+          const railColor = lerpRgb([34, 24, 62], [156, 184, 224], horizonFade);
+
+          if (rl00 && rl10 && rl11 && rl01) {
+            slice.roadLeftRailPoly.setAttribute("display", "inline");
+            slice.roadLeftRailPoly.setAttribute("points", formatPoints([rl00, rl10, rl11, rl01]));
+            slice.roadLeftRailPoly.setAttribute("fill", railColor);
+            slice.roadLeftRailPoly.setAttribute("stroke", railColor);
+            slice.roadLeftRailPoly.setAttribute("stroke-width", "0.6");
           } else {
-            el.rightStripe.setAttribute("visibility", "hidden");
+            slice.roadLeftRailPoly.setAttribute("display", "none");
           }
 
-          // Dashed teal center line (3 segments on, 2 segments off) fading lighter toward horizon
-          const isDashOn = ((s0.segIdx % 5) + 5) % 5 < 3;
-          if (isDashOn && s0.centerL && s0.centerR && s1.centerR && s1.centerL) {
-            el.centerDash.setAttribute("visibility", "visible");
-            el.centerDash.setAttribute("points", quadPointsStr(s0.centerL, s0.centerR, s1.centerR, s1.centerL));
-            el.centerDash.setAttribute("fill", centerColor);
+          if (rr00 && rr10 && rr11 && rr01) {
+            slice.roadRightRailPoly.setAttribute("display", "inline");
+            slice.roadRightRailPoly.setAttribute("points", formatPoints([rr00, rr10, rr11, rr01]));
+            slice.roadRightRailPoly.setAttribute("fill", railColor);
+            slice.roadRightRailPoly.setAttribute("stroke", railColor);
+            slice.roadRightRailPoly.setAttribute("stroke-width", "0.6");
           } else {
-            el.centerDash.setAttribute("visibility", "hidden");
+            slice.roadRightRailPoly.setAttribute("display", "none");
+          }
+
+          // Yellow side lines (continuous along left & right edges, fading to pale cream-yellow at horizon)
+          const sideInset = ROAD_HALF_WIDTH * 0.86;
+          const sideLineHalfW = 0.24;
+          const lineLift = 0.05;
+          const yellowLineColor = lerpRgb([255, 212, 38], [255, 248, 198], horizonFade);
+
+          const ly0A = project3D(road0.x - sideInset - sideLineHalfW, r0Y + lineLift, wz0);
+          const ly0B = project3D(road0.x - sideInset + sideLineHalfW, r0Y + lineLift, wz0);
+          const ly1B = project3D(road1.x - sideInset + sideLineHalfW, r1Y + lineLift, wz1);
+          const ly1A = project3D(road1.x - sideInset - sideLineHalfW, r1Y + lineLift, wz1);
+
+          if (ly0A && ly0B && ly1B && ly1A) {
+            slice.roadLeftYellowLine.setAttribute("display", "inline");
+            slice.roadLeftYellowLine.setAttribute("points", formatPoints([ly0A, ly0B, ly1B, ly1A]));
+            slice.roadLeftYellowLine.setAttribute("fill", yellowLineColor);
+          } else {
+            slice.roadLeftYellowLine.setAttribute("display", "none");
+          }
+
+          const ry0A = project3D(road0.x + sideInset - sideLineHalfW, r0Y + lineLift, wz0);
+          const ry0B = project3D(road0.x + sideInset + sideLineHalfW, r0Y + lineLift, wz0);
+          const ry1B = project3D(road1.x + sideInset + sideLineHalfW, r1Y + lineLift, wz1);
+          const ry1A = project3D(road1.x + sideInset - sideLineHalfW, r1Y + lineLift, wz1);
+
+          if (ry0A && ry0B && ry1B && ry1A) {
+            slice.roadRightYellowLine.setAttribute("display", "inline");
+            slice.roadRightYellowLine.setAttribute("points", formatPoints([ry0A, ry0B, ry1B, ry1A]));
+            slice.roadRightYellowLine.setAttribute("fill", yellowLineColor);
+          } else {
+            slice.roadRightYellowLine.setAttribute("display", "none");
+          }
+
+          // Teal center line (dashed along road center, fading to pale aqua-cyan toward horizon)
+          const dashCycle = ((Math.floor(worldRow0) % 2) === 0);
+          const centerHalfW = 0.22;
+          const tealLineColor = lerpRgb([0, 224, 212], [186, 252, 248], horizonFade);
+
+          const tc0A = project3D(road0.x - centerHalfW, r0Y + lineLift, wz0);
+          const tc0B = project3D(road0.x + centerHalfW, r0Y + lineLift, wz0);
+          const tc1B = project3D(road1.x + centerHalfW, r1Y + lineLift, wz1);
+          const tc1A = project3D(road1.x - centerHalfW, r1Y + lineLift, wz1);
+
+          if (dashCycle && tc0A && tc0B && tc1B && tc1A) {
+            slice.roadCenterTealLine.setAttribute("display", "inline");
+            slice.roadCenterTealLine.setAttribute("points", formatPoints([tc0A, tc0B, tc1B, tc1A]));
+            slice.roadCenterTealLine.setAttribute("fill", tealLineColor);
+          } else {
+            slice.roadCenterTealLine.setAttribute("display", "none");
           }
         }
       }
 
       // =========================================================================
-      // 7. MAIN ANIMATION LOOP
+      // 6. ANIMATION LOOP (SLOW CAMERA ADVANCE TOWARD THE HORIZON)
       // =========================================================================
       let lastTimestamp = null;
+      const maxTravelZ = (TOTAL_HEIGHTMAP_ROWS - ROWS - 3) * CELL_D;
 
       function animate(timestamp) {
         if (lastTimestamp === null) {
@@ -931,19 +812,23 @@
         }
         const dt = Math.min(0.05, (timestamp - lastTimestamp) / 1000);
         lastTimestamp = timestamp;
+        const elapsedSec = timestamp / 1000;
 
-        // Advance camera slowly toward the horizon along the winding roadway
+        // Advance camera slowly forward toward the horizon
         camera.z += camera.speed * dt;
-        const camRoad = getRoadPathAtZ(camera.z + 4.0);
-        camera.x += (camRoad.x - camera.x) * Math.min(1.0, dt * 4.5);
-        camera.y += (camRoad.y + CAMERA_ROAD_CLEARANCE - camera.y) * Math.min(1.0, dt * 4.5);
+        if (camera.z > maxTravelZ) {
+          camera.z = 0;
+        }
 
-        const timeSec = timestamp * 0.001;
+        // Follow the winding roadway's twists and vertical hills while staying low to the surface
+        const currentRoad = getRoadPathAtZ(camera.z);
+        const lookAheadRoad = getRoadPathAtZ(camera.z + 18.0);
+        camera.x = lerp(currentRoad.x, lookAheadRoad.x, 0.25);
+        camera.y = currentRoad.y + CAMERA_ROAD_CLEARANCE;
 
-        updateStars(timeSec);
+        updateStars(elapsedSec);
         updateSun();
-        updateTerrain();
-        updateRoadway();
+        updateWorld();
 
         requestAnimationFrame(animate);
       }
@@ -954,10 +839,10 @@
         camera.x = startRoad.x;
         camera.y = startRoad.y + CAMERA_ROAD_CLEARANCE;
 
+        initStars();
         updateStars(0);
         updateSun();
-        updateTerrain();
-        updateRoadway();
+        updateWorld();
         requestAnimationFrame(animate);
       });
     })();
