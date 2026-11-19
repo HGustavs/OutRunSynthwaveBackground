@@ -287,187 +287,238 @@
         return roadBaseY + mountainLift + rollingHills;
       }
 
+      /**
+       * Conforms precomputed heightmap elevations directly to the road surface height
+       * across the roadway corridor before rendering.
+       */
+      function conformHeightmapToRoadSurface(heightMap, totalRows, cols, cellW, cellD) {
+        const roadSurfaceInset = 0.08;
+        const blendMargin = cellW * 0.5;
+        for (let r = 0; r < totalRows; r++) {
+          const wz = r * cellD;
+          const road = getRoadPathAtZ(wz);
+          const roadSurfaceY = road.y + roadSurfaceInset;
+          const rowHeights = heightMap[r];
+
+          for (let c = 0; c <= cols; c++) {
+            const wx = (c - cols * 0.5) * cellW;
+            const distFromRoad = Math.abs(wx - road.x);
+            if (distFromRoad <= ROAD_HALF_WIDTH) {
+              rowHeights[c] = roadSurfaceY;
+            } else if (distFromRoad < ROAD_HALF_WIDTH + blendMargin) {
+              const t = (distFromRoad - ROAD_HALF_WIDTH) / blendMargin;
+              const smoothT = t * t * (3.0 - 2.0 * t);
+              rowHeights[c] = roadSurfaceY + (rowHeights[c] - roadSurfaceY) * smoothT;
+            }
+          }
+        }
+      }
+
       // =========================================================================
       // 2. 3D PERSPECTIVE PROJECTION HELPER
       // =========================================================================
       function project3D(wx, wy, wz) {
-        const relZ = wz - camera.z;
-        if (relZ <= 1.2) {
+        const dz = wz - camera.z;
+        if (dz <= 0.15) {
           return null;
         }
-        const scale = FOCAL_LENGTH / relZ;
-        const sx = VIEW_W * 0.5 + (wx - camera.x) * scale;
-        const sy = VIEW_H * 0.56 - (wy - camera.y) * scale;
-        return { x: sx, y: sy, scale: scale, z: relZ };
+        const dx = wx - camera.x;
+        const dy = wy - camera.y;
+        const scale = FOCAL_LENGTH / dz;
+        return {
+          x: VIEW_W * 0.5 + dx * scale,
+          y: VIEW_H * 0.52 - dy * scale,
+          scale: scale,
+          dz: dz
+        };
       }
 
       // =========================================================================
-      // 3. 3D PARALLAX STARFIELD (CIRCLE OVER A FOUR-POINT STAR)
+      // 3. 3D PARALLAX STARFIELD (SVG CIRCLE OVER 4-POINT STAR)
       // =========================================================================
-      const STAR_COUNT = 190;
-      const STAR_Z_MIN = 320;
-      const STAR_Z_MAX = 1550;
-      const stars = [];
+      const STAR_COUNT = 135;
+      const starEntities = [];
 
-      function buildFourPointStarPath(rOuter, rInner) {
-        return (
-          `M 0 ${-rOuter} ` +
-          `Q 0 0 ${rInner} ${-rInner} ` +
-          `L ${rOuter} 0 ` +
-          `Q 0 0 ${rInner} ${rInner} ` +
-          `L 0 ${rOuter} ` +
-          `Q 0 0 ${-rInner} ${rInner} ` +
-          `L ${-rOuter} 0 ` +
-          `Q 0 0 ${-rInner} ${-rInner} Z`
-        );
+      function createFourPointStarPath(cx, cy, outerR, innerR) {
+        const pts = [];
+        const spikes = 4;
+        for (let i = 0; i < spikes * 2; i++) {
+          const r = i % 2 === 0 ? outerR : innerR;
+          const angle = (i * Math.PI) / spikes - Math.PI / 2;
+          const px = cx + Math.cos(angle) * r;
+          const py = cy + Math.sin(angle) * r;
+          pts.push(`${i === 0 ? "M" : "L"}${px.toFixed(2)},${py.toFixed(2)}`);
+        }
+        pts.push("Z");
+        return pts.join(" ");
       }
 
       function initStars() {
+        starsLayer.innerHTML = "";
+        starEntities.length = 0;
+
+        const heroTints = [
+          "#ffd6f0",
+          "#cce6ff",
+          "#fff3c4",
+          "#f4ccff",
+          "#c7fff9"
+        ];
+
         for (let i = 0; i < STAR_COUNT; i++) {
-          const isHeroStar = i < 16;
-          const wz = STAR_Z_MIN + hash2D(i, 1.3) * (STAR_Z_MAX - STAR_Z_MIN);
-          const spreadX = (wz / FOCAL_LENGTH) * (VIEW_W * 0.62);
-          const wx = (hash2D(i, 2.7) * 2.0 - 1.0) * spreadX;
+          const s1 = hash2D(i + 1.3, 7.9);
+          const s2 = hash2D(i + 4.7, 19.3);
+          const s3 = hash2D(i + 11.1, 31.7);
+          const s4 = hash2D(i + 23.5, 43.1);
 
-          const minY = 12;
-          const maxY = (wz / FOCAL_LENGTH) * (VIEW_H * 0.54);
-          const wy = minY + hash2D(i, 3.9) * Math.max(40, maxY - minY);
+          const isHero = i < 12;
+          const wx = (s1 - 0.5) * 1450;
+          const wy = 45 + s2 * 440;
+          const wz = 420 + s3 * 1850;
 
-          const baseOuterR = isHeroStar
-            ? 8.5 + hash2D(i, 4.1) * 7.5
-            : 2.3 + hash2D(i, 4.1) * 3.1;
-          const baseInnerR = baseOuterR * 0.22;
-          const coreCircleR = isHeroStar ? baseOuterR * 0.22 : baseOuterR * 0.34;
-
-          let starColor = "#ffffff";
-          let coreColor = "#ffffff";
-          if (isHeroStar) {
-            if (wx < 0) {
-              starColor = "#ff7ad9";
-              coreColor = "#ffe6fa";
-            } else {
-              starColor = "#6bb5ff";
-              coreColor = "#e8f4ff";
-            }
-          } else if (hash2D(i, 5.5) > 0.72) {
-            starColor = wx < 0 ? "#f7b5e6" : "#b8daff";
-          }
+          const baseStarSize = isHero ? 7.5 + s4 * 6.5 : 2.2 + s4 * 2.8;
+          const circleRatio = isHero ? 0.28 + s1 * 0.1 : 0.34 + s2 * 0.1;
+          const tint = isHero ? heroTints[i % heroTints.length] : "#eef4ff";
 
           const g = document.createElementNS(SVG_NS, "g");
-          if (isHeroStar) {
+          if (isHero) {
             g.setAttribute("filter", "url(#star-glow)");
           }
 
-          const fourPoint = document.createElementNS(SVG_NS, "path");
-          fourPoint.setAttribute("d", buildFourPointStarPath(baseOuterR, baseInnerR));
-          fourPoint.setAttribute("fill", starColor);
-          fourPoint.setAttribute("opacity", isHeroStar ? "0.95" : "0.78");
+          const fourPointPath = document.createElementNS(SVG_NS, "path");
+          fourPointPath.setAttribute("fill", tint);
+          fourPointPath.setAttribute("opacity", isHero ? "0.95" : "0.78");
 
-          const circle = document.createElementNS(SVG_NS, "circle");
-          circle.setAttribute("cx", "0");
-          circle.setAttribute("cy", "0");
-          circle.setAttribute("r", coreCircleR.toFixed(2));
-          circle.setAttribute("fill", coreColor);
+          const circleOverlay = document.createElementNS(SVG_NS, "circle");
+          circleOverlay.setAttribute("fill", "#ffffff");
+          circleOverlay.setAttribute("opacity", isHero ? "0.98" : "0.88");
 
-          g.appendChild(fourPoint);
-          g.appendChild(circle);
+          g.appendChild(fourPointPath);
+          g.appendChild(circleOverlay);
           starsLayer.appendChild(g);
 
-          stars.push({
-            el: g,
+          starEntities.push({
+            group: g,
+            fourPointPath: fourPointPath,
+            circleOverlay: circleOverlay,
             wx: wx,
             wy: wy,
             wz: wz,
-            twinklePhase: hash2D(i, 6.8) * Math.PI * 2,
-            twinkleSpeed: 1.4 + hash2D(i, 7.2) * 2.2,
-            isHero: isHeroStar
+            baseStarSize: baseStarSize,
+            circleRatio: circleRatio,
+            twinklePhase: s4 * Math.PI * 2,
+            twinkleSpeed: 1.2 + s3 * 2.4
           });
         }
       }
 
-      function updateStars(timeSec) {
-        const starCamZ = camera.z * 0.14;
-        const starSpan = STAR_Z_MAX - STAR_Z_MIN;
+      function updateStars(elapsedSec) {
+        const starSpanZ = 1850;
+        for (let i = 0; i < starEntities.length; i++) {
+          const st = starEntities[i];
 
-        for (let i = 0; i < stars.length; i++) {
-          const s = stars[i];
-          let relZ = s.wz - starCamZ;
-          while (relZ < STAR_Z_MIN) {
-            relZ += starSpan;
-          }
-          while (relZ > STAR_Z_MAX) {
-            relZ -= starSpan;
+          // Recycle stars smoothly behind camera so they wrap in 3D space as camera advances
+          let relZ = st.wz - camera.z;
+          while (relZ < 240) {
+            st.wz += starSpanZ;
+            relZ = st.wz - camera.z;
           }
 
-          const scale = FOCAL_LENGTH / relZ;
-          const sx = VIEW_W * 0.5 + (s.wx - camera.x * 0.18) * scale;
-          const sy = VIEW_H * 0.56 - (s.wy - camera.y * 0.12) * scale;
+          const proj = project3D(st.wx, st.wy, st.wz);
+          if (!proj || proj.y > VIEW_H * 0.62) {
+            st.group.setAttribute("display", "none");
+            continue;
+          }
 
-          const sizeFactor = Math.max(0.45, Math.min(2.1, scale * 1.35));
-          const twinkle = 0.72 + 0.28 * Math.sin(timeSec * s.twinkleSpeed + s.twinklePhase);
+          st.group.setAttribute("display", "inline");
 
-          s.el.setAttribute(
-            "transform",
-            `translate(${sx.toFixed(2)}, ${sy.toFixed(2)}) scale(${sizeFactor.toFixed(3)})`
+          const twinkle = 0.82 + 0.18 * Math.sin(elapsedSec * st.twinkleSpeed + st.twinklePhase);
+          const outerR = Math.max(1.4, st.baseStarSize * proj.scale * 220 * twinkle);
+          const innerR = outerR * 0.16;
+          const circleR = Math.max(0.7, outerR * st.circleRatio);
+
+          st.fourPointPath.setAttribute(
+            "d",
+            createFourPointStarPath(proj.x, proj.y, outerR, innerR)
           );
-          s.el.setAttribute("opacity", twinkle.toFixed(2));
+          st.circleOverlay.setAttribute("cx", proj.x.toFixed(2));
+          st.circleOverlay.setAttribute("cy", proj.y.toFixed(2));
+          st.circleOverlay.setAttribute("r", circleR.toFixed(2));
         }
       }
 
       // =========================================================================
-      // 4. 3D PROJECTED RETRO OUTRUN SUN WITH SCANLINE CUTOUTS
+      // 4. 3D PROJECTED OUTRUN SUN & HORIZONTAL SCANLINE STRIPES
       // =========================================================================
-      const SUN_START_Z = 5075.0;
-      const SUN_WORLD_X = 0.0;
-      const SUN_WORLD_Y = 238.0;
-      const SUN_WORLD_RADIUS = 1960.0;
-      const SUN_STRIPE_COUNT = 8;
+      const SUN_START_Z = 5075;
+      const SUN_WORLD_RADIUS = 1960;
+      const SUN_WORLD_X = 0;
+      const SUN_WORLD_Y = 455;
+
+      const SUN_STRIPE_RATIOS = [
+        [0.44, 0.025],
+        [0.51, 0.035],
+        [0.59, 0.045],
+        [0.68, 0.055],
+        [0.78, 0.068],
+        [0.89, 0.082]
+      ];
 
       const sunClipRects = [];
-      for (let i = 0; i < SUN_STRIPE_COUNT; i++) {
-        const rect = document.createElementNS(SVG_NS, "rect");
-        sunClip.appendChild(rect);
-        sunClipRects.push(rect);
+      for (let i = 0; i < 1 + SUN_STRIPE_RATIOS.length; i++) {
+        const r = document.createElementNS(SVG_NS, "rect");
+        sunClip.appendChild(r);
+        sunClipRects.push(r);
       }
 
       function updateSun() {
-        const sunCamZ = camera.z * 0.35;
-        const relZ = Math.max(1200.0, SUN_START_Z - sunCamZ);
-        const scale = FOCAL_LENGTH / relZ;
+        const sunProj = project3D(SUN_WORLD_X, SUN_WORLD_Y, SUN_START_Z);
+        if (!sunProj) {
+          return;
+        }
 
-        const screenX = VIEW_W * 0.5 + (SUN_WORLD_X - camera.x * 0.25) * scale;
-        const screenY = VIEW_H * 0.56 - (SUN_WORLD_Y - camera.y * 0.25) * scale;
-        const screenR = SUN_WORLD_RADIUS * scale;
+        const rScreen = SUN_WORLD_RADIUS * sunProj.scale;
+        const cx = sunProj.x;
+        const cy = sunProj.y;
 
-        sunHalo.setAttribute("cx", screenX.toFixed(2));
-        sunHalo.setAttribute("cy", screenY.toFixed(2));
-        sunHalo.setAttribute("r", (screenR * 1.05).toFixed(2));
+        sunHalo.setAttribute("cx", cx.toFixed(2));
+        sunHalo.setAttribute("cy", cy.toFixed(2));
+        sunHalo.setAttribute("r", (rScreen * 1.03).toFixed(2));
 
-        sunDisc.setAttribute("cx", screenX.toFixed(2));
-        sunDisc.setAttribute("cy", screenY.toFixed(2));
-        sunDisc.setAttribute("r", screenR.toFixed(2));
+        sunDisc.setAttribute("cx", cx.toFixed(2));
+        sunDisc.setAttribute("cy", cy.toFixed(2));
+        sunDisc.setAttribute("r", rScreen.toFixed(2));
 
-        const topY = screenY - screenR;
-        const diameter = screenR * 2.0;
-        const bandStep = diameter / SUN_STRIPE_COUNT;
+        const topY = cy - rScreen;
+        const leftX = cx - rScreen * 1.15;
+        const width = rScreen * 2.3;
 
-        for (let i = 0; i < SUN_STRIPE_COUNT; i++) {
-          const t = i / (SUN_STRIPE_COUNT - 1);
-          const gapFraction = 0.04 + Math.pow(t, 1.35) * 0.26;
-          const gapHeight = bandStep * gapFraction;
-          const sliceY = topY + i * bandStep;
-          const sliceH = Math.max(1.0, bandStep - gapHeight);
+        let currentY = topY;
+        for (let i = 0; i < SUN_STRIPE_RATIOS.length; i++) {
+          const [yRatio, hRatio] = SUN_STRIPE_RATIOS[i];
+          const gapTop = cy - rScreen + yRatio * (2 * rScreen);
+          const gapHeight = hRatio * (2 * rScreen);
+          const bandHeight = Math.max(0, gapTop - currentY);
 
           const rect = sunClipRects[i];
-          rect.setAttribute("x", (screenX - screenR - 10).toFixed(2));
-          rect.setAttribute("y", sliceY.toFixed(2));
-          rect.setAttribute("width", (diameter + 20).toFixed(2));
-          rect.setAttribute("height", sliceH.toFixed(2));
+          rect.setAttribute("x", leftX.toFixed(2));
+          rect.setAttribute("y", currentY.toFixed(2));
+          rect.setAttribute("width", width.toFixed(2));
+          rect.setAttribute("height", bandHeight.toFixed(2));
+
+          currentY = gapTop + gapHeight;
         }
+
+        const bottomRect = sunClipRects[sunClipRects.length - 1];
+        const bottomBandHeight = Math.max(0, cy + rScreen - currentY);
+        bottomRect.setAttribute("x", leftX.toFixed(2));
+        bottomRect.setAttribute("y", currentY.toFixed(2));
+        bottomRect.setAttribute("width", width.toFixed(2));
+        bottomRect.setAttribute("height", bottomBandHeight.toFixed(2));
       }
 
       // =========================================================================
-      // 5. UNIFIED BACK-TO-FRONT 3D TERRAIN & ROADWAY DEPTH SLICES (SVG POLYGONS)
+      // 5. FRONT-TO-BACK 3D TERRAIN & ROADWAY STRIPS (SVG POLYGONS)
       // =========================================================================
       const COLS = 84;
       const ROWS = 52;
@@ -475,7 +526,7 @@
       const CELL_D = 7.0;
       const TOTAL_HEIGHTMAP_ROWS = 480;
 
-      // Precomputed static elevation table (independent of camera position)
+      // Precomputed static elevation table (independent of camera position) and conformed to road surface
       const precomputedHeightMap = new Array(TOTAL_HEIGHTMAP_ROWS);
       for (let r = 0; r < TOTAL_HEIGHTMAP_ROWS; r++) {
         const wz = r * CELL_D;
@@ -486,8 +537,13 @@
         }
         precomputedHeightMap[r] = rowHeights;
       }
+      conformHeightmapToRoadSurface(precomputedHeightMap, TOTAL_HEIGHTMAP_ROWS, COLS, CELL_W, CELL_D);
 
-      // Reusable pool of depth-slice groups rendered back-to-front
+      // Reusable pool of strip groups ordered front-to-back (camera -> horizon),
+      // with terrainGroup drawn first and roadGroup drawn second within each strip.
+      // Because SVG renders later DOM elements on top of earlier ones, appending
+      // strips from horizon (ROWS - 1) down to camera (0) ensures near strips
+      // are drawn on top of far strips.
       const depthSlices = [];
       for (let r = 0; r < ROWS; r++) {
         const sliceGroup = document.createElementNS(SVG_NS, "g");
@@ -495,7 +551,6 @@
         const roadGroup = document.createElementNS(SVG_NS, "g");
         sliceGroup.appendChild(terrainGroup);
         sliceGroup.appendChild(roadGroup);
-        worldLayer.appendChild(sliceGroup);
 
         const terrainPolys = [];
         for (let c = 0; c < COLS; c++) {
@@ -530,6 +585,12 @@
         });
       }
 
+      // Append horizon strip first and camera-closest strip last so closer strips
+      // sit later in SVG DOM paint order and are never drawn under distant terrain.
+      for (let r = ROWS - 1; r >= 0; r--) {
+        worldLayer.appendChild(depthSlices[r].group);
+      }
+
       function lerp(a, b, t) {
         return a + (b - a) * t;
       }
@@ -556,247 +617,221 @@
         return h0 + (h1 - h0) * frac;
       }
 
+      // Note: getRoadPathAtZ(wz) only computes the 3D road path coordinates;
+      // renderStrip(...) renders both terrain and roadway polygons together for a single strip.
+      function renderStrip(stripIndex, worldRow0, worldRow1) {
+        const slice = depthSlices[stripIndex];
+
+        if (worldRow1 <= 0.05 || worldRow0 >= TOTAL_HEIGHTMAP_ROWS - 1) {
+          slice.group.setAttribute("display", "none");
+          return;
+        }
+
+        slice.group.setAttribute("display", "inline");
+
+        const wz0 = Math.max(0.1, worldRow0 * CELL_D);
+        const wz1 = Math.max(wz0 + 0.1, worldRow1 * CELL_D);
+        const wzMid = (wz0 + wz1) * 0.5;
+
+        // Back-to-front depth factor: 1.0 at far horizon (stripIndex = ROWS - 1), 0.0 near camera (stripIndex = 0)
+        const depthT = Math.max(0.0, Math.min(1.0, stripIndex / (ROWS - 1)));
+        const horizonFade = Math.pow(depthT, 1.45);
+
+        // ---------------------------------------------------------------------
+        // 1. TERRAIN STRIP POLYGONS (DRAWN FIRST WITHIN THIS STRIP)
+        // ---------------------------------------------------------------------
+        const nearFillColor = [0, 0, 0];
+        const farValleyFillColor = [72, 122, 206];
+        const farMountainFillColor = [54, 96, 178];
+
+        for (let c = 0; c < COLS; c++) {
+          const poly = slice.terrainPolys[c];
+          const wx0 = (c - COLS * 0.5) * CELL_W;
+          const wx1 = (c + 1 - COLS * 0.5) * CELL_W;
+
+          const h00 = samplePrecomputedHeight(c, worldRow0);
+          const h10 = samplePrecomputedHeight(c + 1, worldRow0);
+          const h11 = samplePrecomputedHeight(c + 1, worldRow1);
+          const h01 = samplePrecomputedHeight(c, worldRow1);
+
+          const p00 = project3D(wx0, h00, wz0);
+          const p10 = project3D(wx1, h10, wz0);
+          const p11 = project3D(wx1, h11, wz1);
+          const p01 = project3D(wx0, h01, wz1);
+
+          if (!p00 || !p10 || !p11 || !p01) {
+            poly.setAttribute("display", "none");
+            continue;
+          }
+
+          poly.setAttribute("display", "inline");
+          poly.setAttribute("points", formatPoints([p00, p10, p11, p01]));
+
+          const roadAtTile = getRoadPathAtZ(wzMid);
+          const tileMaxElev = Math.max(h00, h10, h11, h01);
+          const elevAboveRoad = Math.max(0.0, tileMaxElev - roadAtTile.y);
+          const isMountainTile = elevAboveRoad > 2.2;
+
+          // Smooth fill interpolation from pure black near the camera to blue toward the back
+          const depthFillT = Math.pow(depthT, 1.15);
+          const targetFarFill = isMountainTile ? farMountainFillColor : farValleyFillColor;
+          const fillColor = lerpRgb(nearFillColor, targetFarFill, depthFillT);
+
+          // Grid line color shifts as polygon gets closer to camera
+          const nearLineColor = isMountainTile ? [196, 138, 255] : [255, 118, 232];
+          const farLineColor = isMountainTile ? [126, 168, 245] : [132, 182, 255];
+          const strokeColor = lerpRgb(nearLineColor, farLineColor, depthT);
+
+          poly.setAttribute("fill", fillColor);
+          poly.setAttribute("stroke", strokeColor);
+          poly.setAttribute("stroke-width", lerp(1.35, 0.55, depthT).toFixed(2));
+          poly.setAttribute("stroke-linejoin", "round");
+        }
+
+        // ---------------------------------------------------------------------
+        // 2. ROADWAY STRIP POLYGONS (DRAWN SECOND WITHIN THIS STRIP)
+        // ---------------------------------------------------------------------
+        const road0 = getRoadPathAtZ(wz0);
+        const road1 = getRoadPathAtZ(wz1);
+
+        // Road surface sits flush with terrain elevation at road center
+        const surfaceOffset = 0.08;
+        const railDrop = 1.15;
+
+        const r0LeftX = road0.x - ROAD_HALF_WIDTH;
+        const r0RightX = road0.x + ROAD_HALF_WIDTH;
+        const r1LeftX = road1.x - ROAD_HALF_WIDTH;
+        const r1RightX = road1.x + ROAD_HALF_WIDTH;
+
+        const r0Y = road0.y + surfaceOffset;
+        const r1Y = road1.y + surfaceOffset;
+
+        const rd00 = project3D(r0LeftX, r0Y, wz0);
+        const rd10 = project3D(r0RightX, r0Y, wz0);
+        const rd11 = project3D(r1RightX, r1Y, wz1);
+        const rd01 = project3D(r1LeftX, r1Y, wz1);
+
+        if (!rd00 || !rd10 || !rd11 || !rd01) {
+          slice.roadDeckPoly.setAttribute("display", "none");
+          slice.roadLeftRailPoly.setAttribute("display", "none");
+          slice.roadRightRailPoly.setAttribute("display", "none");
+          slice.roadLeftYellowLine.setAttribute("display", "none");
+          slice.roadRightYellowLine.setAttribute("display", "none");
+          slice.roadCenterTealLine.setAttribute("display", "none");
+          return;
+        }
+
+        // Asphalt deck: dark near camera, fading to lighter slate-blue toward horizon
+        const asphaltColor = lerpRgb([16, 14, 28], [138, 168, 214], horizonFade);
+        const asphaltEdgeStroke = lerpRgb([52, 42, 86], [174, 202, 238], horizonFade);
+
+        slice.roadDeckPoly.setAttribute("display", "inline");
+        slice.roadDeckPoly.setAttribute("points", formatPoints([rd00, rd10, rd11, rd01]));
+        slice.roadDeckPoly.setAttribute("fill", asphaltColor);
+        slice.roadDeckPoly.setAttribute("stroke", asphaltEdgeStroke);
+        slice.roadDeckPoly.setAttribute("stroke-width", lerp(1.1, 0.5, horizonFade).toFixed(2));
+        slice.roadDeckPoly.setAttribute("stroke-linejoin", "round");
+
+        // Left & right side curb/guardrail skirts fading lighter toward horizon
+        const rl00 = project3D(r0LeftX, r0Y, wz0);
+        const rl10 = project3D(r0LeftX, r0Y - railDrop, wz0);
+        const rl11 = project3D(r1LeftX, r1Y - railDrop, wz1);
+        const rl01 = project3D(r1LeftX, r1Y, wz1);
+
+        const rr00 = project3D(r0RightX, r0Y, wz0);
+        const rr10 = project3D(r0RightX, r0Y - railDrop, wz0);
+        const rr11 = project3D(r1RightX, r1Y - railDrop, wz1);
+        const rr01 = project3D(r1RightX, r1Y, wz1);
+
+        const railColor = lerpRgb([34, 24, 62], [156, 184, 224], horizonFade);
+
+        if (rl00 && rl10 && rl11 && rl01) {
+          slice.roadLeftRailPoly.setAttribute("display", "inline");
+          slice.roadLeftRailPoly.setAttribute("points", formatPoints([rl00, rl10, rl11, rl01]));
+          slice.roadLeftRailPoly.setAttribute("fill", railColor);
+          slice.roadLeftRailPoly.setAttribute("stroke", railColor);
+          slice.roadLeftRailPoly.setAttribute("stroke-width", "0.6");
+        } else {
+          slice.roadLeftRailPoly.setAttribute("display", "none");
+        }
+
+        if (rr00 && rr10 && rr11 && rr01) {
+          slice.roadRightRailPoly.setAttribute("display", "inline");
+          slice.roadRightRailPoly.setAttribute("points", formatPoints([rr00, rr10, rr11, rr01]));
+          slice.roadRightRailPoly.setAttribute("fill", railColor);
+          slice.roadRightRailPoly.setAttribute("stroke", railColor);
+          slice.roadRightRailPoly.setAttribute("stroke-width", "0.6");
+        } else {
+          slice.roadRightRailPoly.setAttribute("display", "none");
+        }
+
+        // Yellow side lines (continuous along left & right edges, fading to pale cream-yellow at horizon)
+        const sideInset = ROAD_HALF_WIDTH * 0.86;
+        const sideLineHalfW = 0.24;
+        const lineLift = 0.05;
+        const yellowLineColor = lerpRgb([255, 212, 38], [255, 248, 198], horizonFade);
+
+        const ly0A = project3D(road0.x - sideInset - sideLineHalfW, r0Y + lineLift, wz0);
+        const ly0B = project3D(road0.x - sideInset + sideLineHalfW, r0Y + lineLift, wz0);
+        const ly1B = project3D(road1.x - sideInset + sideLineHalfW, r1Y + lineLift, wz1);
+        const ly1A = project3D(road1.x - sideInset - sideLineHalfW, r1Y + lineLift, wz1);
+
+        if (ly0A && ly0B && ly1B && ly1A) {
+          slice.roadLeftYellowLine.setAttribute("display", "inline");
+          slice.roadLeftYellowLine.setAttribute("points", formatPoints([ly0A, ly0B, ly1B, ly1A]));
+          slice.roadLeftYellowLine.setAttribute("fill", yellowLineColor);
+        } else {
+          slice.roadLeftYellowLine.setAttribute("display", "none");
+        }
+
+        const ry0A = project3D(road0.x + sideInset - sideLineHalfW, r0Y + lineLift, wz0);
+        const ry0B = project3D(road0.x + sideInset + sideLineHalfW, r0Y + lineLift, wz0);
+        const ry1B = project3D(road1.x + sideInset + sideLineHalfW, r1Y + lineLift, wz1);
+        const ry1A = project3D(road1.x + sideInset - sideLineHalfW, r1Y + lineLift, wz1);
+
+        if (ry0A && ry0B && ry1B && ry1A) {
+          slice.roadRightYellowLine.setAttribute("display", "inline");
+          slice.roadRightYellowLine.setAttribute("points", formatPoints([ry0A, ry0B, ry1B, ry1A]));
+          slice.roadRightYellowLine.setAttribute("fill", yellowLineColor);
+        } else {
+          slice.roadRightYellowLine.setAttribute("display", "none");
+        }
+
+        // Teal center line (dashed along road center, fading to pale aqua-cyan toward horizon)
+        const dashCycle = ((Math.floor(worldRow0) % 2) === 0);
+        const centerHalfW = 0.22;
+        const tealLineColor = lerpRgb([0, 224, 212], [186, 252, 248], horizonFade);
+
+        const tc0A = project3D(road0.x - centerHalfW, r0Y + lineLift, wz0);
+        const tc0B = project3D(road0.x + centerHalfW, r0Y + lineLift, wz0);
+        const tc1B = project3D(road1.x + centerHalfW, r1Y + lineLift, wz1);
+        const tc1A = project3D(road1.x - centerHalfW, r1Y + lineLift, wz1);
+
+        if (dashCycle && tc0A && tc0B && tc1B && tc1A) {
+          slice.roadCenterTealLine.setAttribute("display", "inline");
+          slice.roadCenterTealLine.setAttribute("points", formatPoints([tc0A, tc0B, tc1B, tc1A]));
+          slice.roadCenterTealLine.setAttribute("fill", tealLineColor);
+        } else {
+          slice.roadCenterTealLine.setAttribute("display", "none");
+        }
+      }
+
       function updateWorld() {
         const baseRowFloat = Math.max(0.0, camera.z / CELL_D);
         const startRowInt = Math.floor(baseRowFloat);
         const rowFrac = baseRowFloat - startRowInt;
 
-        // Render from farthest slice (i = ROWS - 1) to nearest slice (i = 0)
-        for (let i = ROWS - 1; i >= 0; i--) {
-          const slice = depthSlices[i];
+        // Render strips from closest to the camera (i = 0) toward the horizon (i = ROWS - 1),
+        // keeping depthSlices[0] highest in SVG DOM paint order so near terrain is never covered
+        // by terrain further toward the horizon.
+        for (let i = 0; i < ROWS; i++) {
           const relRowStart = i - rowFrac;
           const relRowEnd = relRowStart + 1.0;
 
           const worldRow0 = startRowInt + relRowStart;
           const worldRow1 = startRowInt + relRowEnd;
 
-          if (worldRow1 <= 0.05 || worldRow0 >= TOTAL_HEIGHTMAP_ROWS - 1) {
-            slice.group.setAttribute("display", "none");
-            continue;
-          }
-
-          slice.group.setAttribute("display", "inline");
-
-          const wz0 = Math.max(0.1, worldRow0 * CELL_D);
-          const wz1 = Math.max(wz0 + 0.1, worldRow1 * CELL_D);
-          const wzMid = (wz0 + wz1) * 0.5;
-
-          // Depth factor: 0 near camera, 1 toward horizon
-          const depthT = Math.max(0.0, Math.min(1.0, i / (ROWS - 1)));
-          const horizonFade = Math.pow(depthT, 1.45);
-
-          // -------------------------------------------------------------------
-          // A. TERRAIN POLYGONS FOR THIS DEPTH SLICE
-          // -------------------------------------------------------------------
-          for (let c = 0; c < COLS; c++) {
-            const poly = slice.terrainPolys[c];
-            const wxLeft = (c - COLS * 0.5) * CELL_W;
-            const wxRight = wxLeft + CELL_W;
-
-            const wy00 = samplePrecomputedHeight(c, worldRow0);
-            const wy10 = samplePrecomputedHeight(c + 1, worldRow0);
-            const wy11 = samplePrecomputedHeight(c + 1, worldRow1);
-            const wy01 = samplePrecomputedHeight(c, worldRow1);
-
-            const p00 = project3D(wxLeft, wy00, wz0);
-            const p10 = project3D(wxRight, wy10, wz0);
-            const p11 = project3D(wxRight, wy11, wz1);
-            const p01 = project3D(wxLeft, wy01, wz1);
-
-            if (!p00 || !p10 || !p11 || !p01) {
-              poly.setAttribute("display", "none");
-              continue;
-            }
-
-            poly.setAttribute("display", "inline");
-            poly.setAttribute("points", formatPoints([p00, p10, p11, p01]));
-
-            const avgY = (wy00 + wy10 + wy11 + wy01) * 0.25;
-            const roadAtMid = getRoadPathAtZ(wzMid);
-            const heightAboveRoad = Math.max(0.0, avgY - roadAtMid.y);
-            const isMountain = heightAboveRoad > 1.25;
-
-            const checkerParity = (c + Math.floor(worldRow0)) & 1;
-
-            // Smooth fill interpolation from pure black near camera to blue toward horizon
-            let fillColor;
-            if (isMountain) {
-              const mountainFactor = Math.min(1.0, heightAboveRoad / 36.0);
-              const farMountainBlue = [
-                lerp(42, 112, mountainFactor),
-                lerp(76, 152, mountainFactor),
-                lerp(156, 224, mountainFactor)
-              ];
-              const midMountainTint = [
-                lerp(14, 54, mountainFactor),
-                lerp(24, 84, mountainFactor),
-                lerp(56, 148, mountainFactor)
-              ];
-              const fillMix =
-                depthT < 0.55
-                  ? lerpRgb([0, 0, 0], midMountainTint, depthT / 0.55)
-                  : lerpRgb(midMountainTint, farMountainBlue, (depthT - 0.55) / 0.45);
-              fillColor = fillMix;
-            } else {
-              const farTileBlue = checkerParity === 0 ? [58, 102, 184] : [76, 124, 206];
-              const midTileBlue = checkerParity === 0 ? [12, 22, 52] : [20, 36, 78];
-              fillColor =
-                depthT < 0.6
-                  ? lerpRgb([0, 0, 0], midTileBlue, depthT / 0.6)
-                  : lerpRgb(midTileBlue, farTileBlue, (depthT - 0.6) / 0.4);
-            }
-
-            // Grid line color transitions smoothly from neon magenta/pink near camera to electric blue/periwinkle
-            let strokeColor;
-            let strokeWidth;
-            if (isMountain) {
-              strokeColor = lerpRgb([138, 156, 232], [176, 206, 255], horizonFade);
-              strokeWidth = lerp(1.35, 0.65, horizonFade);
-            } else {
-              const nearPink = [255, 118, 226];
-              const midVioletBlue = [144, 134, 245];
-              const farSkyBlue = [132, 184, 255];
-
-              if (depthT < 0.45) {
-                strokeColor = lerpRgb(nearPink, midVioletBlue, depthT / 0.45);
-              } else {
-                strokeColor = lerpRgb(midVioletBlue, farSkyBlue, (depthT - 0.45) / 0.55);
-              }
-              strokeWidth = lerp(2.1, 0.72, horizonFade);
-            }
-
-            poly.setAttribute("fill", fillColor);
-            poly.setAttribute("stroke", strokeColor);
-            poly.setAttribute("stroke-width", strokeWidth.toFixed(2));
-            poly.setAttribute("stroke-linejoin", "round");
-          }
-
-          // -------------------------------------------------------------------
-          // B. WINDING 3D ROADWAY SEGMENT FOR THIS DEPTH SLICE
-          // -------------------------------------------------------------------
-          const road0 = getRoadPathAtZ(wz0);
-          const road1 = getRoadPathAtZ(wz1);
-
-          // Road surface sits flush with terrain elevation at road center
-          const surfaceOffset = 0.08;
-          const railDrop = 1.15;
-
-          const r0LeftX = road0.x - ROAD_HALF_WIDTH;
-          const r0RightX = road0.x + ROAD_HALF_WIDTH;
-          const r1LeftX = road1.x - ROAD_HALF_WIDTH;
-          const r1RightX = road1.x + ROAD_HALF_WIDTH;
-
-          const r0Y = road0.y + surfaceOffset;
-          const r1Y = road1.y + surfaceOffset;
-
-          const rd00 = project3D(r0LeftX, r0Y, wz0);
-          const rd10 = project3D(r0RightX, r0Y, wz0);
-          const rd11 = project3D(r1RightX, r1Y, wz1);
-          const rd01 = project3D(r1LeftX, r1Y, wz1);
-
-          if (!rd00 || !rd10 || !rd11 || !rd01) {
-            slice.roadDeckPoly.setAttribute("display", "none");
-            slice.roadLeftRailPoly.setAttribute("display", "none");
-            slice.roadRightRailPoly.setAttribute("display", "none");
-            slice.roadLeftYellowLine.setAttribute("display", "none");
-            slice.roadRightYellowLine.setAttribute("display", "none");
-            slice.roadCenterTealLine.setAttribute("display", "none");
-            continue;
-          }
-
-          // Asphalt deck: dark near camera, fading to lighter slate-blue toward horizon
-          const asphaltColor = lerpRgb([16, 14, 28], [138, 168, 214], horizonFade);
-          const asphaltEdgeStroke = lerpRgb([52, 42, 86], [174, 202, 238], horizonFade);
-
-          slice.roadDeckPoly.setAttribute("display", "inline");
-          slice.roadDeckPoly.setAttribute("points", formatPoints([rd00, rd10, rd11, rd01]));
-          slice.roadDeckPoly.setAttribute("fill", asphaltColor);
-          slice.roadDeckPoly.setAttribute("stroke", asphaltEdgeStroke);
-          slice.roadDeckPoly.setAttribute("stroke-width", lerp(1.1, 0.5, horizonFade).toFixed(2));
-          slice.roadDeckPoly.setAttribute("stroke-linejoin", "round");
-
-          // Left & right side curb/guardrail skirts fading lighter toward horizon
-          const rl00 = project3D(r0LeftX, r0Y, wz0);
-          const rl10 = project3D(r0LeftX, r0Y - railDrop, wz0);
-          const rl11 = project3D(r1LeftX, r1Y - railDrop, wz1);
-          const rl01 = project3D(r1LeftX, r1Y, wz1);
-
-          const rr00 = project3D(r0RightX, r0Y, wz0);
-          const rr10 = project3D(r0RightX, r0Y - railDrop, wz0);
-          const rr11 = project3D(r1RightX, r1Y - railDrop, wz1);
-          const rr01 = project3D(r1RightX, r1Y, wz1);
-
-          const railColor = lerpRgb([34, 24, 62], [156, 184, 224], horizonFade);
-
-          if (rl00 && rl10 && rl11 && rl01) {
-            slice.roadLeftRailPoly.setAttribute("display", "inline");
-            slice.roadLeftRailPoly.setAttribute("points", formatPoints([rl00, rl10, rl11, rl01]));
-            slice.roadLeftRailPoly.setAttribute("fill", railColor);
-            slice.roadLeftRailPoly.setAttribute("stroke", railColor);
-            slice.roadLeftRailPoly.setAttribute("stroke-width", "0.6");
-          } else {
-            slice.roadLeftRailPoly.setAttribute("display", "none");
-          }
-
-          if (rr00 && rr10 && rr11 && rr01) {
-            slice.roadRightRailPoly.setAttribute("display", "inline");
-            slice.roadRightRailPoly.setAttribute("points", formatPoints([rr00, rr10, rr11, rr01]));
-            slice.roadRightRailPoly.setAttribute("fill", railColor);
-            slice.roadRightRailPoly.setAttribute("stroke", railColor);
-            slice.roadRightRailPoly.setAttribute("stroke-width", "0.6");
-          } else {
-            slice.roadRightRailPoly.setAttribute("display", "none");
-          }
-
-          // Yellow side lines (continuous along left & right edges, fading to pale cream-yellow at horizon)
-          const sideInset = ROAD_HALF_WIDTH * 0.86;
-          const sideLineHalfW = 0.24;
-          const lineLift = 0.05;
-          const yellowLineColor = lerpRgb([255, 212, 38], [255, 248, 198], horizonFade);
-
-          const ly0A = project3D(road0.x - sideInset - sideLineHalfW, r0Y + lineLift, wz0);
-          const ly0B = project3D(road0.x - sideInset + sideLineHalfW, r0Y + lineLift, wz0);
-          const ly1B = project3D(road1.x - sideInset + sideLineHalfW, r1Y + lineLift, wz1);
-          const ly1A = project3D(road1.x - sideInset - sideLineHalfW, r1Y + lineLift, wz1);
-
-          if (ly0A && ly0B && ly1B && ly1A) {
-            slice.roadLeftYellowLine.setAttribute("display", "inline");
-            slice.roadLeftYellowLine.setAttribute("points", formatPoints([ly0A, ly0B, ly1B, ly1A]));
-            slice.roadLeftYellowLine.setAttribute("fill", yellowLineColor);
-          } else {
-            slice.roadLeftYellowLine.setAttribute("display", "none");
-          }
-
-          const ry0A = project3D(road0.x + sideInset - sideLineHalfW, r0Y + lineLift, wz0);
-          const ry0B = project3D(road0.x + sideInset + sideLineHalfW, r0Y + lineLift, wz0);
-          const ry1B = project3D(road1.x + sideInset + sideLineHalfW, r1Y + lineLift, wz1);
-          const ry1A = project3D(road1.x + sideInset - sideLineHalfW, r1Y + lineLift, wz1);
-
-          if (ry0A && ry0B && ry1B && ry1A) {
-            slice.roadRightYellowLine.setAttribute("display", "inline");
-            slice.roadRightYellowLine.setAttribute("points", formatPoints([ry0A, ry0B, ry1B, ry1A]));
-            slice.roadRightYellowLine.setAttribute("fill", yellowLineColor);
-          } else {
-            slice.roadRightYellowLine.setAttribute("display", "none");
-          }
-
-          // Teal center line (dashed along road center, fading to pale aqua-cyan toward horizon)
-          const dashCycle = ((Math.floor(worldRow0) % 2) === 0);
-          const centerHalfW = 0.22;
-          const tealLineColor = lerpRgb([0, 224, 212], [186, 252, 248], horizonFade);
-
-          const tc0A = project3D(road0.x - centerHalfW, r0Y + lineLift, wz0);
-          const tc0B = project3D(road0.x + centerHalfW, r0Y + lineLift, wz0);
-          const tc1B = project3D(road1.x + centerHalfW, r1Y + lineLift, wz1);
-          const tc1A = project3D(road1.x - centerHalfW, r1Y + lineLift, wz1);
-
-          if (dashCycle && tc0A && tc0B && tc1B && tc1A) {
-            slice.roadCenterTealLine.setAttribute("display", "inline");
-            slice.roadCenterTealLine.setAttribute("points", formatPoints([tc0A, tc0B, tc1B, tc1A]));
-            slice.roadCenterTealLine.setAttribute("fill", tealLineColor);
-          } else {
-            slice.roadCenterTealLine.setAttribute("display", "none");
-          }
+          renderStrip(i, worldRow0, worldRow1);
         }
       }
 
