@@ -86,9 +86,10 @@
         </linearGradient>
 
         <!-- Distant horizon valley atmospheric glow -->
-        <radialGradient id="valley-horizon-glow" cx="50%" cy="57%" r="22%">
-          <stop offset="0%" stop-color="#b7d4ff" stop-opacity="0.85" />
-          <stop offset="35%" stop-color="#6c8cff" stop-opacity="0.35" />
+        <radialGradient id="valley-horizon-glow" cx="50%" cy="56%" r="34%">
+          <stop offset="0%" stop-color="#ff8ec7" stop-opacity="0.72" />
+          <stop offset="38%" stop-color="#e84393" stop-opacity="0.34" />
+          <stop offset="72%" stop-color="#7c287d" stop-opacity="0.14" />
           <stop offset="100%" stop-color="#05030d" stop-opacity="0" />
         </radialGradient>
 
@@ -277,6 +278,7 @@
       // =========================================================================
       const stars = [];
       const STAR_COUNT = 165;
+      const STAR_SIZE_SCALE = 0.80; // 20% smaller stars
 
       function createFourPointStarPath(cx, cy, outerR, innerR) {
         return (
@@ -351,7 +353,7 @@
 
           st.g.setAttribute("display", "inline");
           const twinkle = 0.82 + 0.18 * Math.sin(elapsedSec * 2.4 + st.phase);
-          const r = Math.max(0.55, st.baseRadius * (1450 / effZ) * twinkle);
+          const r = Math.max(0.45, st.baseRadius * STAR_SIZE_SCALE * (1450 / effZ) * twinkle);
           const spikeOuter = r * (st.isHero ? 5.2 : 2.8);
           const spikeInner = r * 0.42;
 
@@ -366,8 +368,9 @@
       // 3. 3D PROJECTED RETRO OUTRUN SUN WITH SCANLINE STRIPES
       // =========================================================================
       const SUN_START_Z = 5075;
-      const SUN_WORLD_RADIUS = 1960;
-      const SUN_WORLD_Y = 390;
+      const SUN_SCALE = 0.70; // 30% smaller sun
+      const SUN_WORLD_RADIUS = 1960 * SUN_SCALE;
+      const SUN_WORLD_Y = 390 * SUN_SCALE + 35;
 
       const stripeRects = [];
       const STRIPE_COUNT = 9;
@@ -788,8 +791,8 @@
         // 1. RENDER STRIP TERRAIN PART
         // ---------------------------------------------------------------------
         const nearFillColor = [0, 0, 0];
-        const farValleyFillColor = [72, 122, 206];
-        const farMountainFillColor = [54, 96, 178];
+        const farValleyFillColor = [176, 86, 152];
+        const farMountainFillColor = [142, 66, 134];
         const terrainCells = stripObj.terrain.cells;
 
         for (let c = 0; c < COLS; c++) {
@@ -814,7 +817,7 @@
           const fillColor = lerpRgb(nearFillColor, targetFarFill, depthFillT);
 
           const nearLineColor = cell.isMountain ? [196, 138, 255] : [255, 118, 232];
-          const farLineColor = cell.isMountain ? [126, 168, 245] : [132, 182, 255];
+          const farLineColor = cell.isMountain ? [238, 134, 186] : [255, 158, 198];
           const strokeColor = lerpRgb(nearLineColor, farLineColor, depthT);
 
           poly.setAttribute("fill", fillColor);
@@ -845,8 +848,8 @@
           return;
         }
 
-        const asphaltColor = lerpRgb([16, 14, 28], [138, 168, 214], horizonFade);
-        const asphaltEdgeStroke = lerpRgb([52, 42, 86], [174, 202, 238], horizonFade);
+        const asphaltColor = lerpRgb([16, 14, 28], [214, 108, 166], horizonFade);
+        const asphaltEdgeStroke = lerpRgb([52, 42, 86], [246, 146, 192], horizonFade);
 
         slot.roadDeckPoly.setAttribute("display", "inline");
         slot.roadDeckPoly.setAttribute("points", formatPoints([rd00, rd10, rd11, rd01]));
@@ -866,7 +869,7 @@
         const rr11 = project3D(road.r1RightX, r1Y - road.railDrop, wz1);
         const rr01 = project3D(road.r1RightX, r1Y, wz1);
 
-        const railColor = lerpRgb([34, 24, 62], [156, 184, 224], horizonFade);
+        const railColor = lerpRgb([34, 24, 62], [224, 122, 178], horizonFade);
 
         if (rl00 && rl10 && rl11 && rl01) {
           slot.roadLeftRailPoly.setAttribute("display", "inline");
@@ -889,7 +892,7 @@
         }
 
         // Yellow side lines
-        const yellowLineColor = lerpRgb([255, 212, 38], [255, 248, 198], horizonFade);
+        const yellowLineColor = lerpRgb([255, 212, 38], [255, 192, 176], horizonFade);
 
         const ly0A = project3D(road.leftYellow0A, r0Y + road.lineLift, wz0);
         const ly0B = project3D(road.leftYellow0B, r0Y + road.lineLift, wz0);
@@ -918,7 +921,7 @@
         }
 
         // Dashed teal center line
-        const tealLineColor = lerpRgb([0, 224, 212], [186, 252, 248], horizonFade);
+        const tealLineColor = lerpRgb([0, 224, 212], [244, 184, 214], horizonFade);
 
         const tc0A = project3D(road.center0A, r0Y + road.lineLift, wz0);
         const tc0B = project3D(road.center0B, r0Y + road.lineLift, wz0);
@@ -958,9 +961,9 @@
           pointStrs[k] = `${sx.toFixed(1)},${sy.toFixed(1)}`;
         }
 
-        // Silhouette color shifts from deep dark violet-black near camera to misty horizon purple
-        const palmFill = lerpRgb([14, 7, 28], [116, 86, 168], horizonFade);
-        const palmStroke = lerpRgb([46, 18, 82], [148, 122, 196], horizonFade);
+        // Silhouette color shifts from deep dark violet-black near camera into sunset pink-magenta haze
+        const palmFill = lerpRgb([14, 7, 28], [218, 108, 168], horizonFade);
+        const palmStroke = lerpRgb([46, 18, 82], [242, 138, 188], horizonFade);
 
         slot.palmPoly.setAttribute("display", "inline");
         slot.palmPoly.setAttribute("points", pointStrs.join(" "));
