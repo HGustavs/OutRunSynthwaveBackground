@@ -787,15 +787,11 @@
         }
 
         const roadDeckPoly = document.createElementNS(SVG_NS, "polygon");
-        const roadLeftRailPoly = document.createElementNS(SVG_NS, "polygon");
-        const roadRightRailPoly = document.createElementNS(SVG_NS, "polygon");
         const roadLeftYellowLine = document.createElementNS(SVG_NS, "polygon");
         const roadRightYellowLine = document.createElementNS(SVG_NS, "polygon");
         const roadCenterTealLine = document.createElementNS(SVG_NS, "polygon");
 
         roadGroup.appendChild(roadDeckPoly);
-        roadGroup.appendChild(roadLeftRailPoly);
-        roadGroup.appendChild(roadRightRailPoly);
         roadGroup.appendChild(roadLeftYellowLine);
         roadGroup.appendChild(roadRightYellowLine);
         roadGroup.appendChild(roadCenterTealLine);
@@ -804,8 +800,6 @@
           group: sliceGroup,
           terrainPolys,
           roadDeckPoly,
-          roadLeftRailPoly,
-          roadRightRailPoly,
           roadLeftYellowLine,
           roadRightYellowLine,
           roadCenterTealLine,
@@ -889,8 +883,6 @@
 
         if (!d0L || !d0R || !d1R || !d1L || isQuadOutsideSkyBounds(d0L, d0R, d1R, d1L)) {
           slot.roadDeckPoly.setAttribute("display", "none");
-          slot.roadLeftRailPoly.setAttribute("display", "none");
-          slot.roadRightRailPoly.setAttribute("display", "none");
           slot.roadLeftYellowLine.setAttribute("display", "none");
           slot.roadRightYellowLine.setAttribute("display", "none");
           slot.roadCenterTealLine.setAttribute("display", "none");
@@ -902,31 +894,6 @@
           slot.roadDeckPoly.setAttribute("fill", deckFill);
           slot.roadDeckPoly.setAttribute("stroke", deckStroke);
           slot.roadDeckPoly.setAttribute("stroke-width", (lineThickness * 0.7).toFixed(2));
-
-          // Left & right side rails
-          const b0L = project3D(road.r0LeftX, road.r0Y - road.railDrop, wz0);
-          const b1L = project3D(road.r1LeftX, road.r1Y - road.railDrop, wz1);
-          if (b0L && b1L && !isQuadOutsideSkyBounds(d0L, d1L, b1L, b0L)) {
-            slot.roadLeftRailPoly.setAttribute("display", "inline");
-            slot.roadLeftRailPoly.setAttribute("points", formatPoints([d0L, d1L, b1L, b0L]));
-            slot.roadLeftRailPoly.setAttribute("fill", lerpRgb([28, 14, 62], [204, 96, 160], horizonFade));
-            slot.roadLeftRailPoly.setAttribute("stroke", lerpRgb([0, 224, 255], [248, 162, 206], horizonFade));
-            slot.roadLeftRailPoly.setAttribute("stroke-width", (lineThickness * 0.75).toFixed(2));
-          } else {
-            slot.roadLeftRailPoly.setAttribute("display", "none");
-          }
-
-          const b0R = project3D(road.r0RightX, road.r0Y - road.railDrop, wz0);
-          const b1R = project3D(road.r1RightX, road.r1Y - road.railDrop, wz1);
-          if (b0R && b1R && !isQuadOutsideSkyBounds(d0R, d1R, b1R, b0R)) {
-            slot.roadRightRailPoly.setAttribute("display", "inline");
-            slot.roadRightRailPoly.setAttribute("points", formatPoints([d0R, d1R, b1R, b0R]));
-            slot.roadRightRailPoly.setAttribute("fill", lerpRgb([28, 14, 62], [204, 96, 160], horizonFade));
-            slot.roadRightRailPoly.setAttribute("stroke", lerpRgb([0, 224, 255], [248, 162, 206], horizonFade));
-            slot.roadRightRailPoly.setAttribute("stroke-width", (lineThickness * 0.75).toFixed(2));
-          } else {
-            slot.roadRightRailPoly.setAttribute("display", "none");
-          }
 
           // Yellow outer edge stripes
           const yL0A = project3D(road.leftYellow0A, road.r0Y + road.lineLift, wz0);
