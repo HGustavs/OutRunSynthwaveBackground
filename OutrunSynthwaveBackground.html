@@ -38,6 +38,40 @@
       display: block;
       user-select: none;
     }
+
+    /* Synthwave SVG download button */
+    #download-svg-btn {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      z-index: 20;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 16px;
+      border-radius: 9999px;
+      border: 1px solid rgba(255, 118, 232, 0.55);
+      background: linear-gradient(135deg, rgba(25, 10, 44, 0.85) 0%, rgba(75, 18, 72, 0.85) 100%);
+      color: #fce7f3;
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      cursor: pointer;
+      backdrop-filter: blur(8px);
+      box-shadow: 0 4px 18px rgba(227, 18, 116, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.15);
+      transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+    }
+
+    #download-svg-btn:hover {
+      transform: translateY(-2px);
+      border-color: rgba(255, 212, 38, 0.85);
+      box-shadow: 0 6px 24px rgba(255, 59, 141, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+    }
+
+    #download-svg-btn:active {
+      transform: translateY(0);
+    }
   </style>
 </head>
 <body>
@@ -143,6 +177,16 @@
       <!-- Layer 5: Unified Back-to-Front 3D Terrain & Roadway Depth Slices (SVG Polygons) -->
       <g id="layer-world"></g>
     </svg>
+
+    <!-- Download Current Frame Button -->
+    <button id="download-svg-btn" type="button" title="Download current frame as SVG">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+        <polyline points="7 10 12 15 17 10" />
+        <line x1="12" y1="15" x2="12" y2="3" />
+      </svg>
+      <span>Download SVG</span>
+    </button>
   </div>
 
   <script>
@@ -162,11 +206,44 @@
       };
 
       // DOM Layer references
+      const outrunSvg = document.getElementById("outrun-svg");
+      const downloadSvgBtn = document.getElementById("download-svg-btn");
       const starsLayer = document.getElementById("layer-stars");
       const worldLayer = document.getElementById("layer-world");
       const sunHalo = document.getElementById("sun-halo");
       const sunDisc = document.getElementById("sun-disc");
       const sunClip = document.getElementById("sun-stripes-clip");
+
+      // =========================================================================
+      // 0. DOWNLOAD CURRENT SVG VIEW HANDLER
+      // =========================================================================
+      function downloadCurrentSvg() {
+        try {
+          const clone = outrunSvg.cloneNode(true);
+          clone.setAttribute("xmlns", SVG_NS);
+          clone.setAttribute("xmlns:xlink", "http://www.w3.org/1999/xlink");
+          clone.setAttribute("width", String(VIEW_W));
+          clone.setAttribute("height", String(VIEW_H));
+
+          const serializer = new XMLSerializer();
+          const svgMarkup = '<?xml version="1.0" encoding="UTF-8"?>\n' + serializer.serializeToString(clone);
+          const blob = new Blob([svgMarkup], { type: "image/svg+xml;charset=utf-8" });
+          const url = URL.createObjectURL(blob);
+
+          const link = document.createElement("a");
+          link.href = url;
+          link.download = `synthwave-outrun-${Math.round(camera.z)}.svg`;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+        } catch (err) {
+          console.error("Failed to export SVG:", err);
+        }
+      }
+
+      downloadSvgBtn.addEventListener("click", downloadCurrentSvg);
 
       // =========================================================================
       // 1. DETERMINISTIC NOISE, 3D PROJECTION & ROAD PATH
@@ -432,122 +509,265 @@
       const VISIBLE_STRIP_COUNT = 52; // Controls how many strips in front of the camera are rendered
       const NEAR_LINE_THICKNESS = 1.65; // Line thickness closest to camera
       const FAR_LINE_THICKNESS = 0.35;  // Line thickness furthest at horizon
+      const NEAR_CLIP_Z = 0.25;         // Near-plane culling threshold in front of camera
+      const PALM_TREE_SIZE_SCALE = 0.70; // 30% smaller palm trees
+      const PALM_TREE_SPAWN_CHANCE = 0.14; // 50% reduced spawn chance per road segment (was 0.28)
       const CELL_W = 4.2;
       const CELL_D = 7.0;
       const TOTAL_HEIGHTMAP_ROWS = 480;
       const TOTAL_STRIPS = TOTAL_HEIGHTMAP_ROWS - 1;
 
-      // Step A: Build raw grid vertex heights & conform road corridor before generating strip objects
-      const rawGridHeights = new Array(TOTAL_HEIGHTMAP_ROWS);
+      function lerp(a, b, t) {
+        return a + (b - a) * t;
+      }
+
+      function lerpRgb(c1, c2, t) {
+        const clamped = Math.max(0, Math.min(1, t));
+        const r = Math.round(lerp(c1[0], c2[0], clamped));
+        const g = Math.round(lerp(c1[1], c2[1], clamped));
+        const b = Math.round(lerp(c1[2], c2[2], clamped));
+        return `rgb(${r}, ${g}, ${b})`;
+      }
+
+      function formatPoints(pts) {
+        return `${pts[0].x.toFixed(1)},${pts[0].y.toFixed(1)} ` +
+               `${pts[1].x.toFixed(1)},${pts[1].y.toFixed(1)} ` +
+               `${pts[2].x.toFixed(1)},${pts[2].y.toFixed(1)} ` +
+               `${pts[3].x.toFixed(1)},${pts[3].y.toFixed(1)}`;
+      }
+
+      // Sky rectangle bounds matching #layer-sky (<rect x="-400" y="-200" width="2000" height="1300" />)
+      const SKY_MIN_X = -400;
+      const SKY_MAX_X = 1600;
+      const SKY_MIN_Y = -200;
+      const SKY_MAX_Y = 1100;
+
+      // Returns true when all four projected corners lie outside the sky rectangle extents
+      function isQuadOutsideSkyBounds(p0, p1, p2, p3) {
+        const allLeft = p0.x < SKY_MIN_X && p1.x < SKY_MIN_X && p2.x < SKY_MIN_X && p3.x < SKY_MIN_X;
+        if (allLeft) return true;
+        const allRight = p0.x > SKY_MAX_X && p1.x > SKY_MAX_X && p2.x > SKY_MAX_X && p3.x > SKY_MAX_X;
+        if (allRight) return true;
+        const allAbove = p0.y < SKY_MIN_Y && p1.y < SKY_MIN_Y && p2.y < SKY_MIN_Y && p3.y < SKY_MIN_Y;
+        if (allAbove) return true;
+        const allBelow = p0.y > SKY_MAX_Y && p1.y > SKY_MAX_Y && p2.y > SKY_MAX_Y && p3.y > SKY_MAX_Y;
+        return allBelow;
+      }
+
+      // Build procedural closed 2D palm tree polygon templates (normalized to height = 1.0)
+      function buildPalmPolygonTemplate(seed) {
+        const lean = (hash2(seed, 1.7) - 0.5) * 0.22;
+        const trunkSegs = 6;
+        const leftTrunk = [];
+        const rightTrunk = [];
+
+        for (let i = 0; i <= trunkSegs; i++) {
+          const t = i / trunkSegs;
+          const cx = lean * t * t;
+          const y = t * 0.76;
+          const halfW = lerp(0.036, 0.013, t);
+          leftTrunk.push([cx - halfW, y]);
+          rightTrunk.push([cx + halfW, y]);
+        }
+
+        const crownX = lean;
+        const crownY = 0.76;
+        const frondSpecs = [
+          { angle: -2.65, len: 0.36, droop: 0.14 },
+          { angle: -2.05, len: 0.40, droop: 0.11 },
+          { angle: -1.45, len: 0.34, droop: 0.08 },
+          { angle: -0.75, len: 0.35, droop: 0.09 },
+          { angle: -0.15, len: 0.41, droop: 0.12 },
+          { angle:  0.42, len: 0.36, droop: 0.15 }
+        ];
+
+        const frondPoints = [];
+        for (let f = 0; f < frondSpecs.length; f++) {
+          const spec = frondSpecs[f];
+          const jitter = (hash2(seed, 3.1 + f * 1.9) - 0.5) * 0.14;
+          const ang = spec.angle + jitter;
+          const len = spec.len * (0.9 + hash2(seed, 8.3 + f) * 0.22);
+          const dx = Math.cos(ang);
+          const dy = -Math.sin(ang);
+          const px = -dy;
+          const py = dx;
+
+          const steps = 4;
+          for (let s = 1; s <= steps; s++) {
+            const st = s / steps;
+            const droopOffset = spec.droop * st * st;
+            const w = (1.0 - st) * 0.032 + 0.004;
+            const bx = crownX + dx * len * st;
+            const by = crownY + dy * len * st - droopOffset;
+            frondPoints.push([bx + px * w, by + py * w]);
+          }
+          const tipX = crownX + dx * len * 1.08;
+          const tipY = crownY + dy * len * 1.08 - spec.droop * 1.15;
+          frondPoints.push([tipX, tipY]);
+
+          for (let s = steps; s >= 1; s--) {
+            const st = s / steps;
+            const droopOffset = spec.droop * st * st;
+            const w = (1.0 - st) * 0.026 + 0.004;
+            const bx = crownX + dx * len * st;
+            const by = crownY + dy * len * st - droopOffset;
+            frondPoints.push([bx - px * w, by - py * w]);
+          }
+          frondPoints.push([crownX, crownY + 0.01]);
+        }
+
+        const poly = [];
+        for (let i = 0; i < leftTrunk.length; i++) poly.push(leftTrunk[i]);
+        for (let i = 0; i < frondPoints.length; i++) poly.push(frondPoints[i]);
+        for (let i = rightTrunk.length - 1; i >= 0; i--) poly.push(rightTrunk[i]);
+        return poly;
+      }
+
+      const PALM_TEMPLATES = [
+        buildPalmPolygonTemplate(11),
+        buildPalmPolygonTemplate(27),
+        buildPalmPolygonTemplate(43),
+        buildPalmPolygonTemplate(69)
+      ];
+
+      // Precompute raw terrain heights, conform strictly to road surface, and bake immutable strip objects
+      const rawHeightGrid = new Array(TOTAL_HEIGHTMAP_ROWS);
       for (let r = 0; r < TOTAL_HEIGHTMAP_ROWS; r++) {
         const wz = r * CELL_D;
-        const rowHeights = new Float32Array(COLS + 1);
+        const row = new Float32Array(COLS + 1);
         for (let c = 0; c <= COLS; c++) {
           const wx = (c - COLS * 0.5) * CELL_W;
-          rowHeights[c] = computeStaticTerrainHeight(wx, wz);
+          row[c] = computeStaticTerrainHeight(wx, wz);
         }
-        rawGridHeights[r] = rowHeights;
+        rawHeightGrid[r] = row;
       }
 
       const bakedRoadSurfaceY = conformHeightmapToRoadSurface(
-        rawGridHeights,
+        rawHeightGrid,
         TOTAL_HEIGHTMAP_ROWS,
         COLS,
         CELL_W,
         CELL_D
       );
 
-      // Step B: Pre-generate an immutable array of strip objects, each containing:
-      //   - strip.terrain: precomputed 3D tile quads & elevation flags for this strip
-      //   - strip.road: precomputed 3D deck, side rails, yellow edge lines, & dashed teal center line
-      function buildPregeneratedStrips() {
-        const strips = new Array(TOTAL_STRIPS);
-        const railDrop = 1.15;
-        const sideInset = ROAD_HALF_WIDTH * 0.86;
-        const sideLineHalfW = 0.24;
-        const centerHalfW = 0.22;
-        const lineLift = 0.05;
+      function sampleBakedRoadSurfaceY(rowFloat) {
+        const r0 = Math.floor(rowFloat);
+        const r1 = Math.min(TOTAL_HEIGHTMAP_ROWS - 1, r0 + 1);
+        const frac = rowFloat - r0;
+        return lerp(bakedRoadSurfaceY[r0], bakedRoadSurfaceY[r1], frac);
+      }
 
-        for (let s = 0; s < TOTAL_STRIPS; s++) {
-          const wz0 = s * CELL_D;
-          const wz1 = (s + 1) * CELL_D;
-          const hRow0 = rawGridHeights[s];
-          const hRow1 = rawGridHeights[s + 1];
-          const r0Y = bakedRoadSurfaceY[s];
-          const r1Y = bakedRoadSurfaceY[s + 1];
-          const stripRoadMidY = (r0Y + r1Y) * 0.5;
+      function sampleBakedTerrainHeight(wx, wz) {
+        const rowFloat = Math.max(0, Math.min(TOTAL_HEIGHTMAP_ROWS - 1.001, wz / CELL_D));
+        const colFloat = Math.max(0, Math.min(COLS - 0.001, wx / CELL_W + COLS * 0.5));
+        const r0 = Math.floor(rowFloat);
+        const r1 = Math.min(TOTAL_HEIGHTMAP_ROWS - 1, r0 + 1);
+        const c0 = Math.floor(colFloat);
+        const c1 = Math.min(COLS, c0 + 1);
+        const fr = rowFloat - r0;
+        const fc = colFloat - c0;
 
-          // Pre-generate terrain part (COLS quad cells spanning [wz0, wz1])
-          const terrainCells = new Array(COLS);
-          for (let c = 0; c < COLS; c++) {
-            const wx0 = (c - COLS * 0.5) * CELL_W;
-            const wx1 = (c + 1 - COLS * 0.5) * CELL_W;
-            const y00 = hRow0[c];
-            const y10 = hRow0[c + 1];
-            const y11 = hRow1[c + 1];
-            const y01 = hRow1[c];
-            const maxElev = Math.max(y00, y10, y11, y01);
-            const isMountain = Math.max(0.0, maxElev - stripRoadMidY) > 2.2;
+        const h00 = rawHeightGrid[r0][c0];
+        const h10 = rawHeightGrid[r0][c1];
+        const h01 = rawHeightGrid[r1][c0];
+        const h11 = rawHeightGrid[r1][c1];
+        return lerp(lerp(h00, h10, fc), lerp(h01, h11, fc), fr);
+      }
 
-            terrainCells[c] = Object.freeze({
-              wx0,
-              wx1,
-              y00,
-              y10,
-              y11,
-              y01,
-              isMountain
-            });
-          }
+      const pregeneratedStrips = new Array(TOTAL_STRIPS);
+      const stripPalmPlacements = new Array(TOTAL_STRIPS).fill(null);
 
-          // Pre-generate road part (deck, rails, yellow edge lines, & dashed teal center line)
-          const road0 = getRoadPathAtZ(wz0);
-          const road1 = getRoadPathAtZ(wz1);
+      for (let s = 0; s < TOTAL_STRIPS; s++) {
+        const wz0 = s * CELL_D;
+        const wz1 = (s + 1) * CELL_D;
+        const row0 = rawHeightGrid[s];
+        const row1 = rawHeightGrid[s + 1];
 
-          const r0LeftX = road0.x - ROAD_HALF_WIDTH;
-          const r0RightX = road0.x + ROAD_HALF_WIDTH;
-          const r1LeftX = road1.x - ROAD_HALF_WIDTH;
-          const r1RightX = road1.x + ROAD_HALF_WIDTH;
+        const cells = new Array(COLS);
+        for (let c = 0; c < COLS; c++) {
+          const wx0 = (c - COLS * 0.5) * CELL_W;
+          const wx1 = (c + 1 - COLS * 0.5) * CELL_W;
+          const y00 = row0[c];
+          const y10 = row0[c + 1];
+          const y11 = row1[c + 1];
+          const y01 = row1[c];
 
-          const roadPart = Object.freeze({
-            r0LeftX,
-            r0RightX,
-            r1LeftX,
-            r1RightX,
-            r0Y,
-            r1Y,
-            railDrop,
-            leftYellow0A: road0.x - sideInset - sideLineHalfW,
-            leftYellow0B: road0.x - sideInset + sideLineHalfW,
-            leftYellow1A: road1.x - sideInset - sideLineHalfW,
-            leftYellow1B: road1.x - sideInset + sideLineHalfW,
-            rightYellow0A: road0.x + sideInset - sideLineHalfW,
-            rightYellow0B: road0.x + sideInset + sideLineHalfW,
-            rightYellow1A: road1.x + sideInset - sideLineHalfW,
-            rightYellow1B: road1.x + sideInset + sideLineHalfW,
-            center0A: road0.x - centerHalfW,
-            center0B: road0.x + centerHalfW,
-            center1A: road1.x - centerHalfW,
-            center1B: road1.x + centerHalfW,
-            lineLift,
-            hasCenterDash: (s % 2) === 0
-          });
-
-          strips[s] = Object.freeze({
-            index: s,
-            wz0,
-            wz1,
-            terrain: Object.freeze({
-              cells: Object.freeze(terrainCells)
-            }),
-            road: roadPart
+          const baseRoadY = Math.min(bakedRoadSurfaceY[s], bakedRoadSurfaceY[s + 1]);
+          const maxCellH = Math.max(y00, y10, y11, y01) - baseRoadY;
+          cells[c] = Object.freeze({
+            wx0,
+            wx1,
+            y00,
+            y10,
+            y11,
+            y01,
+            isMountain: maxCellH > 1.25
           });
         }
 
-        return Object.freeze(strips);
+        const road0 = getRoadPathAtZ(wz0);
+        const road1 = getRoadPathAtZ(wz1);
+        const r0Y = bakedRoadSurfaceY[s];
+        const r1Y = bakedRoadSurfaceY[s + 1];
+        const yellowInset = 0.36;
+        const yellowWidth = 0.24;
+        const centerHalfW = 0.14;
+
+        const roadPart = Object.freeze({
+          r0Y,
+          r1Y,
+          r0LeftX: road0.x - ROAD_HALF_WIDTH,
+          r0RightX: road0.x + ROAD_HALF_WIDTH,
+          r1LeftX: road1.x - ROAD_HALF_WIDTH,
+          r1RightX: road1.x + ROAD_HALF_WIDTH,
+          railDrop: 0.85,
+          lineLift: 0.04,
+          leftYellow0A: road0.x - ROAD_HALF_WIDTH + yellowInset,
+          leftYellow0B: road0.x - ROAD_HALF_WIDTH + yellowInset + yellowWidth,
+          leftYellow1A: road1.x - ROAD_HALF_WIDTH + yellowInset,
+          leftYellow1B: road1.x - ROAD_HALF_WIDTH + yellowInset + yellowWidth,
+          rightYellow0A: road0.x + ROAD_HALF_WIDTH - yellowInset - yellowWidth,
+          rightYellow0B: road0.x + ROAD_HALF_WIDTH - yellowInset,
+          rightYellow1A: road1.x + ROAD_HALF_WIDTH - yellowInset - yellowWidth,
+          rightYellow1B: road1.x + ROAD_HALF_WIDTH - yellowInset,
+          center0A: road0.x - centerHalfW,
+          center0B: road0.x + centerHalfW,
+          center1A: road1.x - centerHalfW,
+          center1B: road1.x + centerHalfW,
+          hasCenterDash: s % 3 !== 2
+        });
+
+        pregeneratedStrips[s] = Object.freeze({
+          index: s,
+          wz0,
+          wz1,
+          terrain: Object.freeze({ cells: Object.freeze(cells) }),
+          road: roadPart
+        });
+
+        // Random roadside palm tree placement
+        if (s >= 6 && hash2(s, 14.3) > (1.0 - PALM_TREE_SPAWN_CHANCE)) {
+          const side = hash2(s, 29.7) > 0.5 ? 1 : -1;
+          const wzMid = (wz0 + wz1) * 0.5;
+          const roadMid = getRoadPathAtZ(wzMid);
+          const lateralOffset = ROAD_HALF_WIDTH + 3.2 + hash2(s, 41.2) * 5.5;
+          const palmX = roadMid.x + side * lateralOffset;
+          const palmY = sampleBakedTerrainHeight(palmX, wzMid);
+          const worldHeight = (14.5 + hash2(s, 53.8) * 6.5) * PALM_TREE_SIZE_SCALE;
+          const tpl = PALM_TEMPLATES[s % PALM_TEMPLATES.length];
+
+          stripPalmPlacements[s] = Object.freeze({
+            wx: palmX,
+            wy: palmY,
+            wz: wzMid,
+            worldHeight,
+            template: tpl
+          });
+        }
       }
 
-      const pregeneratedStrips = buildPregeneratedStrips();
+      Object.freeze(pregeneratedStrips);
+      Object.freeze(stripPalmPlacements);
 
       // Reusable SVG element pool sized strictly to VISIBLE_STRIP_COUNT.
       // Only strips in front of the camera [0 .. VISIBLE_STRIP_COUNT - 1] are rendered.
@@ -588,201 +808,28 @@
           roadRightRailPoly,
           roadLeftYellowLine,
           roadRightYellowLine,
-          roadCenterTealLine
+          roadCenterTealLine,
+          palmPoly: null
         });
       }
 
       // Append furthest visible slot first and closest slot last so nearer strips
-      // always paint on top of distant strips in SVG document order.
+      // always occlude strips further toward the horizon in SVG paint order.
       for (let i = VISIBLE_STRIP_COUNT - 1; i >= 0; i--) {
         worldLayer.appendChild(visibleStripSlots[i].group);
       }
 
-      function lerp(a, b, t) {
-        return a + (b - a) * t;
-      }
-
-      function lerpRgb(c1, c2, t) {
-        const clamped = Math.max(0.0, Math.min(1.0, t));
-        const r = Math.round(lerp(c1[0], c2[0], clamped));
-        const g = Math.round(lerp(c1[1], c2[1], clamped));
-        const b = Math.round(lerp(c1[2], c2[2], clamped));
-        return `rgb(${r}, ${g}, ${b})`;
-      }
-
-      function formatPoints(pts) {
-        return pts.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
-      }
-
-      function sampleBakedRoadSurfaceY(worldRowFloat) {
-        const clampedRow = Math.max(0.0, Math.min(TOTAL_HEIGHTMAP_ROWS - 1.001, worldRowFloat));
-        const r0 = Math.floor(clampedRow);
-        const r1 = Math.min(TOTAL_HEIGHTMAP_ROWS - 1, r0 + 1);
-        const frac = clampedRow - r0;
-        const y0 = bakedRoadSurfaceY[r0];
-        const y1 = bakedRoadSurfaceY[r1];
-        return y0 + (y1 - y0) * frac;
-      }
-
-      // =========================================================================
-      // 4B. PROCEDURAL FLAT POLYGON PALM TREE SPRITES BESIDE ROAD SEGMENTS
-      // =========================================================================
-      // Generates a closed 2D polygon outline (in normalized tree units where
-      // base = (0, 0) and crown height = 1.0) representing a synthwave palm tree
-      // silhouette with a curved segmented trunk and radiating jagged fronds.
-      function buildPalmPolygonTemplate(leanDir, variantSeed) {
-        const pts = [];
-        const trunkSteps = 9;
-        const trunkTopY = 0.72;
-        const leanX = leanDir * (0.09 + variantSeed * 0.06);
-
-        // Left trunk edge (bottom to top)
-        for (let i = 0; i <= trunkSteps; i++) {
-          const t = i / trunkSteps;
-          const y = t * trunkTopY;
-          const cx = leanX * (t * t);
-          const halfW = lerp(0.036, 0.015, t);
-          pts.push([cx - halfW, y]);
-        }
-
-        const crownX = leanX;
-        const crownY = trunkTopY + 0.02;
-
-        // Radiating palm fronds (left-lower -> left-upper -> top -> right-upper -> right-lower)
-        const frondSpecs = [
-          { angle: 2.88, len: 0.29, droop: 0.09, width: 0.032 },
-          { angle: 2.48, len: 0.34, droop: 0.07, width: 0.035 },
-          { angle: 2.02, len: 0.31, droop: 0.04, width: 0.033 },
-          { angle: 1.56, len: 0.25, droop: 0.02, width: 0.028 },
-          { angle: 1.12, len: 0.31, droop: 0.04, width: 0.033 },
-          { angle: 0.66, len: 0.34, droop: 0.07, width: 0.035 },
-          { angle: 0.26, len: 0.29, droop: 0.09, width: 0.032 }
-        ];
-
-        for (let f = 0; f < frondSpecs.length; f++) {
-          const spec = frondSpecs[f];
-          const a = spec.angle + (variantSeed - 0.5) * 0.08;
-          const dirX = Math.cos(a);
-          const dirY = Math.sin(a);
-          const perpX = -dirY;
-          const perpY = dirX;
-
-          // Upper serrated edge out to frond tip
-          const segs = 4;
-          for (let s = 1; s <= segs; s++) {
-            const u = s / segs;
-            const drop = spec.droop * u * u;
-            const px = crownX + dirX * spec.len * u;
-            const py = crownY + dirY * spec.len * u - drop;
-            const bladeW = spec.width * (1.0 - u * 0.85);
-            pts.push([px + perpX * bladeW, py + perpY * bladeW]);
-          }
-
-          // Frond tip
-          const tipX = crownX + dirX * (spec.len * 1.06);
-          const tipY = crownY + dirY * (spec.len * 1.06) - spec.droop * 1.12;
-          pts.push([tipX, tipY]);
-
-          // Lower edge returning toward crown hub
-          for (let s = segs - 1; s >= 1; s--) {
-            const u = s / segs;
-            const drop = spec.droop * u * u;
-            const px = crownX + dirX * spec.len * u;
-            const py = crownY + dirY * spec.len * u - drop;
-            const bladeW = spec.width * 0.65 * (1.0 - u * 0.7);
-            pts.push([px - perpX * bladeW, py - perpY * bladeW]);
-          }
-
-          // Return notch near crown center
-          pts.push([crownX + dirX * 0.03, crownY + dirY * 0.03 - 0.012]);
-        }
-
-        // Right trunk edge (top to bottom)
-        for (let i = trunkSteps; i >= 0; i--) {
-          const t = i / trunkSteps;
-          const y = t * trunkTopY;
-          const cx = leanX * (t * t);
-          const halfW = lerp(0.036, 0.015, t);
-          pts.push([cx + halfW, y]);
-        }
-
-        return Object.freeze(pts);
-      }
-
-      const PALM_TEMPLATES = Object.freeze([
-        buildPalmPolygonTemplate(-1, 0.2),
-        buildPalmPolygonTemplate(1, 0.5),
-        buildPalmPolygonTemplate(-1, 0.8),
-        buildPalmPolygonTemplate(1, 0.15)
-      ]);
-
-      // Sample ground height from pre-conformed grid at arbitrary (wx, stripIndex)
-      function sampleStripGroundY(stripIndex, wx) {
-        const colFloat = wx / CELL_W + COLS * 0.5;
-        const c0 = Math.max(0, Math.min(COLS, Math.floor(colFloat)));
-        const c1 = Math.max(0, Math.min(COLS, c0 + 1));
-        const frac = Math.max(0.0, Math.min(1.0, colFloat - c0));
-        const row = rawGridHeights[stripIndex];
-        return row[c0] + (row[c1] - row[c0]) * frac;
-      }
-
-      // Pre-assign random palm tree placements to random road strips before rendering
-      const stripPalmPlacements = new Array(TOTAL_STRIPS).fill(null);
-      let nextSpawnStrip = 5;
-      for (let s = 5; s < TOTAL_STRIPS - 2; s++) {
-        if (s < nextSpawnStrip) continue;
-        const r = hash2(s, 31.7);
-        if (r > 0.36) {
-          const wzMid = (s + 0.5) * CELL_D;
-          const roadMid = getRoadPathAtZ(wzMid);
-          const side = hash2(s, 53.1) < 0.5 ? -1 : 1;
-          const lateralOffset = ROAD_HALF_WIDTH + 2.8 + hash2(s, 71.9) * 5.2;
-          const wx = roadMid.x + side * lateralOffset;
-          const groundY = sampleStripGroundY(s, wx);
-          const worldHeight = 14.5 + hash2(s, 89.3) * 5.5;
-          const templateIdx = Math.floor(hash2(s, 17.4) * PALM_TEMPLATES.length);
-
-          stripPalmPlacements[s] = Object.freeze({
-            wx,
-            wy: groundY - 0.15,
-            wz: wzMid,
-            worldHeight,
-            template: PALM_TEMPLATES[templateIdx]
-          });
-
-          // Advance by a random interval of 3 to 9 road strips
-          nextSpawnStrip = s + 3 + Math.floor(hash2(s, 97.2) * 7);
-        }
-      }
-
-      // Attach a flat polygon element to each visible strip slot for its palm tree sprite
-      for (let i = 0; i < VISIBLE_STRIP_COUNT; i++) {
-        const palmPoly = document.createElementNS(SVG_NS, "polygon");
-        palmPoly.setAttribute("display", "none");
-        visibleStripSlots[i].group.appendChild(palmPoly);
-        visibleStripSlots[i].palmPoly = palmPoly;
-      }
-
-      // Renders a single pre-generated strip object (both its terrain part and road part)
-      // into the specified visible SVG slot.
       function renderStripObject(slotIndex, stripObj) {
         const slot = visibleStripSlots[slotIndex];
-
-        if (!stripObj) {
+        // Cull null strips and any segment whose far edge has passed behind the camera
+        if (!stripObj || stripObj.wz1 <= camera.z + NEAR_CLIP_Z) {
           slot.group.setAttribute("display", "none");
           return;
         }
+        slot.group.setAttribute("display", "inline");
 
         const wz0 = stripObj.wz0;
         const wz1 = stripObj.wz1;
-
-        // Skip strips entirely behind the camera near plane
-        if (wz1 <= camera.z + 0.15) {
-          slot.group.setAttribute("display", "none");
-          return;
-        }
-
-        slot.group.setAttribute("display", "inline");
 
         // Relative depth factor across the visible strips [0 near camera -> 1 at VISIBLE_STRIP_COUNT - 1]
         const denom = Math.max(1, VISIBLE_STRIP_COUNT - 1);
@@ -791,23 +838,21 @@
         const lineThickness = lerp(NEAR_LINE_THICKNESS, FAR_LINE_THICKNESS, depthT);
 
         // ---------------------------------------------------------------------
-        // 1. RENDER STRIP TERRAIN PART
+        // 1. RENDER STRIP TERRAIN POLYGONS
         // ---------------------------------------------------------------------
-        const nearFillColor = [0, 0, 0];
-        const farValleyFillColor = [176, 86, 152];
-        const farMountainFillColor = [142, 66, 134];
-        const terrainCells = stripObj.terrain.cells;
+        const cells = stripObj.terrain.cells;
+        const terrainPolys = slot.terrainPolys;
 
         for (let c = 0; c < COLS; c++) {
-          const poly = slot.terrainPolys[c];
-          const cell = terrainCells[c];
+          const cell = cells[c];
+          const poly = terrainPolys[c];
 
           const p00 = project3D(cell.wx0, cell.y00, wz0);
           const p10 = project3D(cell.wx1, cell.y10, wz0);
           const p11 = project3D(cell.wx1, cell.y11, wz1);
           const p01 = project3D(cell.wx0, cell.y01, wz1);
 
-          if (!p00 || !p10 || !p11 || !p01) {
+          if (!p00 || !p10 || !p11 || !p01 || isQuadOutsideSkyBounds(p00, p10, p11, p01)) {
             poly.setAttribute("display", "none");
             continue;
           }
@@ -815,143 +860,142 @@
           poly.setAttribute("display", "inline");
           poly.setAttribute("points", formatPoints([p00, p10, p11, p01]));
 
-          const depthFillT = Math.pow(depthT, 1.15);
-          const targetFarFill = cell.isMountain ? farMountainFillColor : farValleyFillColor;
-          const fillColor = lerpRgb(nearFillColor, targetFarFill, depthFillT);
-
-          const nearLineColor = cell.isMountain ? [196, 138, 255] : [255, 118, 232];
-          const farLineColor = cell.isMountain ? [238, 134, 186] : [255, 158, 198];
-          const strokeColor = lerpRgb(nearLineColor, farLineColor, depthT);
-
-          poly.setAttribute("fill", fillColor);
-          poly.setAttribute("stroke", strokeColor);
-          poly.setAttribute("stroke-width", lineThickness.toFixed(2));
-          poly.setAttribute("stroke-linejoin", "round");
+          if (cell.isMountain) {
+            const mFill = lerpRgb([19, 8, 42], [206, 98, 162], horizonFade);
+            const mStroke = lerpRgb([164, 52, 235], [248, 148, 198], horizonFade);
+            poly.setAttribute("fill", mFill);
+            poly.setAttribute("stroke", mStroke);
+            poly.setAttribute("stroke-width", (lineThickness * 0.85).toFixed(2));
+          } else {
+            const isAlt = (stripObj.index + c) % 2 === 0;
+            const gFill = isAlt
+              ? lerpRgb([8, 4, 22], [198, 92, 158], horizonFade)
+              : lerpRgb([12, 6, 30], [208, 102, 166], horizonFade);
+            const gStroke = lerpRgb([132, 44, 212], [244, 142, 194], horizonFade);
+            poly.setAttribute("fill", gFill);
+            poly.setAttribute("stroke", gStroke);
+            poly.setAttribute("stroke-width", lineThickness.toFixed(2));
+          }
         }
 
         // ---------------------------------------------------------------------
-        // 2. RENDER STRIP ROAD PART
+        // 2. RENDER STRIP ROADWAY POLYGONS
         // ---------------------------------------------------------------------
         const road = stripObj.road;
-        const r0Y = road.r0Y;
-        const r1Y = road.r1Y;
+        const d0L = project3D(road.r0LeftX, road.r0Y, wz0);
+        const d0R = project3D(road.r0RightX, road.r0Y, wz0);
+        const d1R = project3D(road.r1RightX, road.r1Y, wz1);
+        const d1L = project3D(road.r1LeftX, road.r1Y, wz1);
 
-        const rd00 = project3D(road.r0LeftX, r0Y, wz0);
-        const rd10 = project3D(road.r0RightX, r0Y, wz0);
-        const rd11 = project3D(road.r1RightX, r1Y, wz1);
-        const rd01 = project3D(road.r1LeftX, r1Y, wz1);
-
-        if (!rd00 || !rd10 || !rd11 || !rd01) {
+        if (!d0L || !d0R || !d1R || !d1L || isQuadOutsideSkyBounds(d0L, d0R, d1R, d1L)) {
           slot.roadDeckPoly.setAttribute("display", "none");
           slot.roadLeftRailPoly.setAttribute("display", "none");
           slot.roadRightRailPoly.setAttribute("display", "none");
           slot.roadLeftYellowLine.setAttribute("display", "none");
           slot.roadRightYellowLine.setAttribute("display", "none");
           slot.roadCenterTealLine.setAttribute("display", "none");
-          return;
-        }
-
-        const asphaltColor = lerpRgb([16, 14, 28], [214, 108, 166], horizonFade);
-        const asphaltEdgeStroke = lerpRgb([52, 42, 86], [246, 146, 192], horizonFade);
-
-        slot.roadDeckPoly.setAttribute("display", "inline");
-        slot.roadDeckPoly.setAttribute("points", formatPoints([rd00, rd10, rd11, rd01]));
-        slot.roadDeckPoly.setAttribute("fill", asphaltColor);
-        slot.roadDeckPoly.setAttribute("stroke", asphaltEdgeStroke);
-        slot.roadDeckPoly.setAttribute("stroke-width", (lineThickness * 0.85).toFixed(2));
-        slot.roadDeckPoly.setAttribute("stroke-linejoin", "round");
-
-        // Side curb/guardrail skirts
-        const rl00 = project3D(road.r0LeftX, r0Y, wz0);
-        const rl10 = project3D(road.r0LeftX, r0Y - road.railDrop, wz0);
-        const rl11 = project3D(road.r1LeftX, r1Y - road.railDrop, wz1);
-        const rl01 = project3D(road.r1LeftX, r1Y, wz1);
-
-        const rr00 = project3D(road.r0RightX, r0Y, wz0);
-        const rr10 = project3D(road.r0RightX, r0Y - road.railDrop, wz0);
-        const rr11 = project3D(road.r1RightX, r1Y - road.railDrop, wz1);
-        const rr01 = project3D(road.r1RightX, r1Y, wz1);
-
-        const railColor = lerpRgb([34, 24, 62], [224, 122, 178], horizonFade);
-
-        if (rl00 && rl10 && rl11 && rl01) {
-          slot.roadLeftRailPoly.setAttribute("display", "inline");
-          slot.roadLeftRailPoly.setAttribute("points", formatPoints([rl00, rl10, rl11, rl01]));
-          slot.roadLeftRailPoly.setAttribute("fill", railColor);
-          slot.roadLeftRailPoly.setAttribute("stroke", railColor);
-          slot.roadLeftRailPoly.setAttribute("stroke-width", (lineThickness * 0.5).toFixed(2));
         } else {
-          slot.roadLeftRailPoly.setAttribute("display", "none");
-        }
+          const deckFill = lerpRgb([14, 9, 28], [192, 88, 154], horizonFade);
+          const deckStroke = lerpRgb([88, 38, 148], [238, 134, 188], horizonFade);
+          slot.roadDeckPoly.setAttribute("display", "inline");
+          slot.roadDeckPoly.setAttribute("points", formatPoints([d0L, d0R, d1R, d1L]));
+          slot.roadDeckPoly.setAttribute("fill", deckFill);
+          slot.roadDeckPoly.setAttribute("stroke", deckStroke);
+          slot.roadDeckPoly.setAttribute("stroke-width", (lineThickness * 0.7).toFixed(2));
 
-        if (rr00 && rr10 && rr11 && rr01) {
-          slot.roadRightRailPoly.setAttribute("display", "inline");
-          slot.roadRightRailPoly.setAttribute("points", formatPoints([rr00, rr10, rr11, rr01]));
-          slot.roadRightRailPoly.setAttribute("fill", railColor);
-          slot.roadRightRailPoly.setAttribute("stroke", railColor);
-          slot.roadRightRailPoly.setAttribute("stroke-width", (lineThickness * 0.5).toFixed(2));
-        } else {
-          slot.roadRightRailPoly.setAttribute("display", "none");
-        }
+          // Left & right side rails
+          const b0L = project3D(road.r0LeftX, road.r0Y - road.railDrop, wz0);
+          const b1L = project3D(road.r1LeftX, road.r1Y - road.railDrop, wz1);
+          if (b0L && b1L && !isQuadOutsideSkyBounds(d0L, d1L, b1L, b0L)) {
+            slot.roadLeftRailPoly.setAttribute("display", "inline");
+            slot.roadLeftRailPoly.setAttribute("points", formatPoints([d0L, d1L, b1L, b0L]));
+            slot.roadLeftRailPoly.setAttribute("fill", lerpRgb([28, 14, 62], [204, 96, 160], horizonFade));
+            slot.roadLeftRailPoly.setAttribute("stroke", lerpRgb([0, 224, 255], [248, 162, 206], horizonFade));
+            slot.roadLeftRailPoly.setAttribute("stroke-width", (lineThickness * 0.75).toFixed(2));
+          } else {
+            slot.roadLeftRailPoly.setAttribute("display", "none");
+          }
 
-        // Yellow side lines
-        const yellowLineColor = lerpRgb([255, 212, 38], [255, 192, 176], horizonFade);
+          const b0R = project3D(road.r0RightX, road.r0Y - road.railDrop, wz0);
+          const b1R = project3D(road.r1RightX, road.r1Y - road.railDrop, wz1);
+          if (b0R && b1R && !isQuadOutsideSkyBounds(d0R, d1R, b1R, b0R)) {
+            slot.roadRightRailPoly.setAttribute("display", "inline");
+            slot.roadRightRailPoly.setAttribute("points", formatPoints([d0R, d1R, b1R, b0R]));
+            slot.roadRightRailPoly.setAttribute("fill", lerpRgb([28, 14, 62], [204, 96, 160], horizonFade));
+            slot.roadRightRailPoly.setAttribute("stroke", lerpRgb([0, 224, 255], [248, 162, 206], horizonFade));
+            slot.roadRightRailPoly.setAttribute("stroke-width", (lineThickness * 0.75).toFixed(2));
+          } else {
+            slot.roadRightRailPoly.setAttribute("display", "none");
+          }
 
-        const ly0A = project3D(road.leftYellow0A, r0Y + road.lineLift, wz0);
-        const ly0B = project3D(road.leftYellow0B, r0Y + road.lineLift, wz0);
-        const ly1B = project3D(road.leftYellow1B, r1Y + road.lineLift, wz1);
-        const ly1A = project3D(road.leftYellow1A, r1Y + road.lineLift, wz1);
+          // Yellow outer edge stripes
+          const yL0A = project3D(road.leftYellow0A, road.r0Y + road.lineLift, wz0);
+          const yL0B = project3D(road.leftYellow0B, road.r0Y + road.lineLift, wz0);
+          const yL1B = project3D(road.leftYellow1B, road.r1Y + road.lineLift, wz1);
+          const yL1A = project3D(road.leftYellow1A, road.r1Y + road.lineLift, wz1);
+          if (yL0A && yL0B && yL1B && yL1A && !isQuadOutsideSkyBounds(yL0A, yL0B, yL1B, yL1A)) {
+            slot.roadLeftYellowLine.setAttribute("display", "inline");
+            slot.roadLeftYellowLine.setAttribute("points", formatPoints([yL0A, yL0B, yL1B, yL1A]));
+            slot.roadLeftYellowLine.setAttribute("fill", lerpRgb([255, 214, 56], [252, 168, 192], horizonFade));
+          } else {
+            slot.roadLeftYellowLine.setAttribute("display", "none");
+          }
 
-        if (ly0A && ly0B && ly1B && ly1A) {
-          slot.roadLeftYellowLine.setAttribute("display", "inline");
-          slot.roadLeftYellowLine.setAttribute("points", formatPoints([ly0A, ly0B, ly1B, ly1A]));
-          slot.roadLeftYellowLine.setAttribute("fill", yellowLineColor);
-        } else {
-          slot.roadLeftYellowLine.setAttribute("display", "none");
-        }
+          const yR0A = project3D(road.rightYellow0A, road.r0Y + road.lineLift, wz0);
+          const yR0B = project3D(road.rightYellow0B, road.r0Y + road.lineLift, wz0);
+          const yR1B = project3D(road.rightYellow1B, road.r1Y + road.lineLift, wz1);
+          const yR1A = project3D(road.rightYellow1A, road.r1Y + road.lineLift, wz1);
+          if (yR0A && yR0B && yR1B && yR1A && !isQuadOutsideSkyBounds(yR0A, yR0B, yR1B, yR1A)) {
+            slot.roadRightYellowLine.setAttribute("display", "inline");
+            slot.roadRightYellowLine.setAttribute("points", formatPoints([yR0A, yR0B, yR1B, yR1A]));
+            slot.roadRightYellowLine.setAttribute("fill", lerpRgb([255, 214, 56], [252, 168, 192], horizonFade));
+          } else {
+            slot.roadRightYellowLine.setAttribute("display", "none");
+          }
 
-        const ry0A = project3D(road.rightYellow0A, r0Y + road.lineLift, wz0);
-        const ry0B = project3D(road.rightYellow0B, r0Y + road.lineLift, wz0);
-        const ry1B = project3D(road.rightYellow1B, r1Y + road.lineLift, wz1);
-        const ry1A = project3D(road.rightYellow1A, r1Y + road.lineLift, wz1);
-
-        if (ry0A && ry0B && ry1B && ry1A) {
-          slot.roadRightYellowLine.setAttribute("display", "inline");
-          slot.roadRightYellowLine.setAttribute("points", formatPoints([ry0A, ry0B, ry1B, ry1A]));
-          slot.roadRightYellowLine.setAttribute("fill", yellowLineColor);
-        } else {
-          slot.roadRightYellowLine.setAttribute("display", "none");
-        }
-
-        // Dashed teal center line
-        const tealLineColor = lerpRgb([0, 224, 212], [244, 184, 214], horizonFade);
-
-        const tc0A = project3D(road.center0A, r0Y + road.lineLift, wz0);
-        const tc0B = project3D(road.center0B, r0Y + road.lineLift, wz0);
-        const tc1B = project3D(road.center1B, r1Y + road.lineLift, wz1);
-        const tc1A = project3D(road.center1A, r1Y + road.lineLift, wz1);
-
-        if (road.hasCenterDash && tc0A && tc0B && tc1B && tc1A) {
-          slot.roadCenterTealLine.setAttribute("display", "inline");
-          slot.roadCenterTealLine.setAttribute("points", formatPoints([tc0A, tc0B, tc1B, tc1A]));
-          slot.roadCenterTealLine.setAttribute("fill", tealLineColor);
-        } else {
-          slot.roadCenterTealLine.setAttribute("display", "none");
+          // Dashed teal center line
+          if (road.hasCenterDash) {
+            const c0A = project3D(road.center0A, road.r0Y + road.lineLift, wz0);
+            const c0B = project3D(road.center0B, road.r0Y + road.lineLift, wz0);
+            const c1B = project3D(road.center1B, road.r1Y + road.lineLift, wz1);
+            const c1A = project3D(road.center1A, road.r1Y + road.lineLift, wz1);
+            if (c0A && c0B && c1B && c1A && !isQuadOutsideSkyBounds(c0A, c0B, c1B, c1A)) {
+              slot.roadCenterTealLine.setAttribute("display", "inline");
+              slot.roadCenterTealLine.setAttribute("points", formatPoints([c0A, c0B, c1B, c1A]));
+              slot.roadCenterTealLine.setAttribute("fill", lerpRgb([34, 242, 232], [248, 166, 206], horizonFade));
+            } else {
+              slot.roadCenterTealLine.setAttribute("display", "none");
+            }
+          } else {
+            slot.roadCenterTealLine.setAttribute("display", "none");
+          }
         }
 
         // ---------------------------------------------------------------------
-        // 3. RENDER PERSPECTIVE-SCALED FLAT POLYGON PALM TREE (IF PRESENT)
+        // 3. RENDER PERSPECTIVE-SCALED FLAT POLYGON PALM TREE (ONLY IF PRESENT)
         // ---------------------------------------------------------------------
         const palm = stripPalmPlacements[stripObj.index];
         if (!palm) {
-          slot.palmPoly.setAttribute("display", "none");
+          if (slot.palmPoly) {
+            slot.group.removeChild(slot.palmPoly);
+            slot.palmPoly = null;
+          }
           return;
         }
 
         const baseProj = project3D(palm.wx, palm.wy, palm.wz);
         if (!baseProj) {
-          slot.palmPoly.setAttribute("display", "none");
+          if (slot.palmPoly) {
+            slot.group.removeChild(slot.palmPoly);
+            slot.palmPoly = null;
+          }
           return;
+        }
+
+        if (!slot.palmPoly) {
+          slot.palmPoly = document.createElementNS(SVG_NS, "polygon");
+          slot.palmPoly.setAttribute("stroke-linejoin", "round");
+          slot.group.appendChild(slot.palmPoly);
         }
 
         // Perspective-correct pixel height & width from focal scale
@@ -968,17 +1012,15 @@
         const palmFill = lerpRgb([14, 7, 28], [218, 108, 168], horizonFade);
         const palmStroke = lerpRgb([46, 18, 82], [242, 138, 188], horizonFade);
 
-        slot.palmPoly.setAttribute("display", "inline");
         slot.palmPoly.setAttribute("points", pointStrs.join(" "));
         slot.palmPoly.setAttribute("fill", palmFill);
         slot.palmPoly.setAttribute("stroke", palmStroke);
         slot.palmPoly.setAttribute("stroke-width", (lineThickness * 0.65).toFixed(2));
-        slot.palmPoly.setAttribute("stroke-linejoin", "round");
       }
-
-      // Renders only the VISIBLE_STRIP_COUNT pre-generated strips directly in front of the camera.
+      // Renders only the VISIBLE_STRIP_COUNT pre-generated strips strictly in front of the camera,
+      // culling any strip that has already passed behind the camera plane.
       function updateWorld() {
-        const firstVisibleStripIndex = Math.max(0, Math.floor(camera.z / CELL_D));
+        const firstVisibleStripIndex = Math.max(0, Math.floor((camera.z + NEAR_CLIP_Z) / CELL_D));
 
         for (let i = 0; i < VISIBLE_STRIP_COUNT; i++) {
           const stripIndex = firstVisibleStripIndex + i;
