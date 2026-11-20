@@ -430,6 +430,8 @@
       // =========================================================================
       const COLS = 84;
       const VISIBLE_STRIP_COUNT = 52; // Controls how many strips in front of the camera are rendered
+      const NEAR_LINE_THICKNESS = 1.65; // Line thickness closest to camera
+      const FAR_LINE_THICKNESS = 0.35;  // Line thickness furthest at horizon
       const CELL_W = 4.2;
       const CELL_D = 7.0;
       const TOTAL_HEIGHTMAP_ROWS = 480;
@@ -786,6 +788,7 @@
         const denom = Math.max(1, VISIBLE_STRIP_COUNT - 1);
         const depthT = Math.max(0.0, Math.min(1.0, slotIndex / denom));
         const horizonFade = Math.pow(depthT, 1.45);
+        const lineThickness = lerp(NEAR_LINE_THICKNESS, FAR_LINE_THICKNESS, depthT);
 
         // ---------------------------------------------------------------------
         // 1. RENDER STRIP TERRAIN PART
@@ -822,7 +825,7 @@
 
           poly.setAttribute("fill", fillColor);
           poly.setAttribute("stroke", strokeColor);
-          poly.setAttribute("stroke-width", lerp(1.35, 0.55, depthT).toFixed(2));
+          poly.setAttribute("stroke-width", lineThickness.toFixed(2));
           poly.setAttribute("stroke-linejoin", "round");
         }
 
@@ -855,7 +858,7 @@
         slot.roadDeckPoly.setAttribute("points", formatPoints([rd00, rd10, rd11, rd01]));
         slot.roadDeckPoly.setAttribute("fill", asphaltColor);
         slot.roadDeckPoly.setAttribute("stroke", asphaltEdgeStroke);
-        slot.roadDeckPoly.setAttribute("stroke-width", lerp(1.1, 0.5, horizonFade).toFixed(2));
+        slot.roadDeckPoly.setAttribute("stroke-width", (lineThickness * 0.85).toFixed(2));
         slot.roadDeckPoly.setAttribute("stroke-linejoin", "round");
 
         // Side curb/guardrail skirts
@@ -876,7 +879,7 @@
           slot.roadLeftRailPoly.setAttribute("points", formatPoints([rl00, rl10, rl11, rl01]));
           slot.roadLeftRailPoly.setAttribute("fill", railColor);
           slot.roadLeftRailPoly.setAttribute("stroke", railColor);
-          slot.roadLeftRailPoly.setAttribute("stroke-width", "0.6");
+          slot.roadLeftRailPoly.setAttribute("stroke-width", (lineThickness * 0.5).toFixed(2));
         } else {
           slot.roadLeftRailPoly.setAttribute("display", "none");
         }
@@ -886,7 +889,7 @@
           slot.roadRightRailPoly.setAttribute("points", formatPoints([rr00, rr10, rr11, rr01]));
           slot.roadRightRailPoly.setAttribute("fill", railColor);
           slot.roadRightRailPoly.setAttribute("stroke", railColor);
-          slot.roadRightRailPoly.setAttribute("stroke-width", "0.6");
+          slot.roadRightRailPoly.setAttribute("stroke-width", (lineThickness * 0.5).toFixed(2));
         } else {
           slot.roadRightRailPoly.setAttribute("display", "none");
         }
@@ -969,7 +972,7 @@
         slot.palmPoly.setAttribute("points", pointStrs.join(" "));
         slot.palmPoly.setAttribute("fill", palmFill);
         slot.palmPoly.setAttribute("stroke", palmStroke);
-        slot.palmPoly.setAttribute("stroke-width", lerp(0.9, 0.35, horizonFade).toFixed(2));
+        slot.palmPoly.setAttribute("stroke-width", (lineThickness * 0.65).toFixed(2));
         slot.palmPoly.setAttribute("stroke-linejoin", "round");
       }
 
