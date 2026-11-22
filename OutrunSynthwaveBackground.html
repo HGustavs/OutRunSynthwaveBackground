@@ -770,7 +770,7 @@
       Object.freeze(stripPalmPlacements);
 
       // Reusable SVG element pool sized strictly to VISIBLE_STRIP_COUNT.
-      // Only strips in front of the camera [0 .. VISIBLE_STRIP_COUNT - 1] are rendered.
+      // Only strips in front of the camera up to VISIBLE_STRIP_COUNT are populated.
       const visibleStripSlots = [];
       for (let i = 0; i < VISIBLE_STRIP_COUNT; i++) {
         const sliceGroup = document.createElementNS(SVG_NS, "g");
@@ -807,20 +807,44 @@
         });
       }
 
-      // Append furthest visible slot first and closest slot last so nearer strips
-      // always occlude strips further toward the horizon in SVG paint order.
-      for (let i = VISIBLE_STRIP_COUNT - 1; i >= 0; i--) {
-        worldLayer.appendChild(visibleStripSlots[i].group);
+      // Ensures a visible strip group is mounted in #layer-world in back-to-front order
+      // (farthest slot VISIBLE_STRIP_COUNT - 1 at the bottom, nearest slot 0 on top)
+      function attachStripGroupInOrder(slotIndex, sliceGroup) {
+        if (sliceGroup.parentNode === worldLayer) return;
+
+        let insertBeforeNode = null;
+        for (let i = slotIndex + 1; i < VISIBLE_STRIP_COUNT; i++) {
+          const olderGroup = visibleStripSlots[i].group;
+          if (olderGroup.parentNode === worldLayer) {
+            insertBeforeNode = olderGroup;
+            break;
+          }
+        }
+
+        worldLayer.insertBefore(sliceGroup, insertBeforeNode);
+      }
+
+      // Detaches a culled strip group completely from #layer-world so it is omitted from the document
+      function omitCulledStripGroup(slot) {
+        if (slot.group.parentNode) {
+          slot.group.parentNode.removeChild(slot.group);
+        }
+        if (slot.palmPoly) {
+          if (slot.palmPoly.parentNode) {
+            slot.palmPoly.parentNode.removeChild(slot.palmPoly);
+          }
+          slot.palmPoly = null;
+        }
       }
 
       function renderStripObject(slotIndex, stripObj) {
         const slot = visibleStripSlots[slotIndex];
-        // Cull null strips and any segment whose far edge has passed behind the camera
+        // Omit null strips and any segment whose far edge has passed behind the camera
         if (!stripObj || stripObj.wz1 <= camera.z + NEAR_CLIP_Z) {
-          slot.group.setAttribute("display", "none");
+          omitCulledStripGroup(slot);
           return;
         }
-        slot.group.setAttribute("display", "inline");
+        attachStripGroupInOrder(slotIndex, slot.group);
 
         const wz0 = stripObj.wz0;
         const wz1 = stripObj.wz1;
@@ -959,20 +983,34 @@
           return;
         }
 
-        if (!slot.palmPoly) {
-          slot.palmPoly = document.createElementNS(SVG_NS, "polygon");
-          slot.palmPoly.setAttribute("stroke-linejoin", "round");
-          slot.group.appendChild(slot.palmPoly);
-        }
-
         // Perspective-correct pixel height & width from focal scale
         const screenH = palm.worldHeight * baseProj.scale;
         const tpl = palm.template;
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
         const pointStrs = new Array(tpl.length);
         for (let k = 0; k < tpl.length; k++) {
           const sx = baseProj.x + tpl[k][0] * screenH;
           const sy = baseProj.y - tpl[k][1] * screenH;
+          if (sx < minX) minX = sx;
+          if (sx > maxX) maxX = sx;
+          if (sy < minY) minY = sy;
+          if (sy > maxY) maxY = sy;
           pointStrs[k] = `${sx.toFixed(1)},${sy.toFixed(1)}`;
+        }
+
+        // Cull palm tree completely if its bounding box lies outside the sky rectangle
+        if (maxX < SKY_MIN_X || minX > SKY_MAX_X || maxY < SKY_MIN_Y || minY > SKY_MAX_Y) {
+          if (slot.palmPoly) {
+            slot.group.removeChild(slot.palmPoly);
+            slot.palmPoly = null;
+          }
+          return;
+        }
+
+        if (!slot.palmPoly) {
+          slot.palmPoly = document.createElementNS(SVG_NS, "polygon");
+          slot.palmPoly.setAttribute("stroke-linejoin", "round");
+          slot.group.appendChild(slot.palmPoly);
         }
 
         // Silhouette color shifts from deep dark violet-black near camera into sunset pink-magenta haze
@@ -984,8 +1022,8 @@
         slot.palmPoly.setAttribute("stroke", palmStroke);
         slot.palmPoly.setAttribute("stroke-width", (lineThickness * 0.65).toFixed(2));
       }
-      // Renders only the VISIBLE_STRIP_COUNT pre-generated strips strictly in front of the camera,
-      // culling any strip that has already passed behind the camera plane.
+
+      // Renders only the VISIBLE_STRIP_COUNT pre-generated strips strictly in front of the camera
       function updateWorld() {
         const firstVisibleStripIndex = Math.max(0, Math.floor((camera.z + NEAR_CLIP_Z) / CELL_D));
 
