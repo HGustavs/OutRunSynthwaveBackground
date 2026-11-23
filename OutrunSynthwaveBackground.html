@@ -769,83 +769,11 @@
       Object.freeze(pregeneratedStrips);
       Object.freeze(stripPalmPlacements);
 
-      // Reusable SVG element pool sized strictly to VISIBLE_STRIP_COUNT.
-      // Only strips in front of the camera up to VISIBLE_STRIP_COUNT are populated.
-      const visibleStripSlots = [];
-      for (let i = 0; i < VISIBLE_STRIP_COUNT; i++) {
-        const sliceGroup = document.createElementNS(SVG_NS, "g");
-        const terrainGroup = document.createElementNS(SVG_NS, "g");
-        const roadGroup = document.createElementNS(SVG_NS, "g");
-        sliceGroup.appendChild(terrainGroup);
-        sliceGroup.appendChild(roadGroup);
-
-        const terrainPolys = [];
-        for (let c = 0; c < COLS; c++) {
-          const poly = document.createElementNS(SVG_NS, "polygon");
-          terrainGroup.appendChild(poly);
-          terrainPolys.push(poly);
-        }
-
-        const roadDeckPoly = document.createElementNS(SVG_NS, "polygon");
-        const roadLeftYellowLine = document.createElementNS(SVG_NS, "polygon");
-        const roadRightYellowLine = document.createElementNS(SVG_NS, "polygon");
-        const roadCenterTealLine = document.createElementNS(SVG_NS, "polygon");
-
-        roadGroup.appendChild(roadDeckPoly);
-        roadGroup.appendChild(roadLeftYellowLine);
-        roadGroup.appendChild(roadRightYellowLine);
-        roadGroup.appendChild(roadCenterTealLine);
-
-        visibleStripSlots.push({
-          group: sliceGroup,
-          terrainPolys,
-          roadDeckPoly,
-          roadLeftYellowLine,
-          roadRightYellowLine,
-          roadCenterTealLine,
-          palmPoly: null
-        });
-      }
-
-      // Ensures a visible strip group is mounted in #layer-world in back-to-front order
-      // (farthest slot VISIBLE_STRIP_COUNT - 1 at the bottom, nearest slot 0 on top)
-      function attachStripGroupInOrder(slotIndex, sliceGroup) {
-        if (sliceGroup.parentNode === worldLayer) return;
-
-        let insertBeforeNode = null;
-        for (let i = slotIndex + 1; i < VISIBLE_STRIP_COUNT; i++) {
-          const olderGroup = visibleStripSlots[i].group;
-          if (olderGroup.parentNode === worldLayer) {
-            insertBeforeNode = olderGroup;
-            break;
-          }
-        }
-
-        worldLayer.insertBefore(sliceGroup, insertBeforeNode);
-      }
-
-      // Detaches a culled strip group completely from #layer-world so it is omitted from the document
-      function omitCulledStripGroup(slot) {
-        if (slot.group.parentNode) {
-          slot.group.parentNode.removeChild(slot.group);
-        }
-        if (slot.palmPoly) {
-          if (slot.palmPoly.parentNode) {
-            slot.palmPoly.parentNode.removeChild(slot.palmPoly);
-          }
-          slot.palmPoly = null;
-        }
-      }
-
       function renderStripObject(slotIndex, stripObj) {
         var stripstr="";
-        const slot = visibleStripSlots[slotIndex];
-        // Omit null strips and any segment whose far edge has passed behind the camera
         if (!stripObj || stripObj.wz1 <= camera.z + NEAR_CLIP_Z) {
-          // omitCulledStripGroup(slot);
           return stripstr;
         }
-//        attachStripGroupInOrder(slotIndex, slot.group);
 
         const wz0 = stripObj.wz0;
         const wz1 = stripObj.wz1;
@@ -860,11 +788,9 @@
         // 1. RENDER STRIP TERRAIN POLYGONS
         // ---------------------------------------------------------------------
         const cells = stripObj.terrain.cells;
-        const terrainPolys = slot.terrainPolys;
 
         for (let c = 0; c < COLS; c++) {
           const cell = cells[c];
-          const poly = terrainPolys[c];
 
           const p00 = project3D(cell.wx0, cell.y00, wz0);
           const p10 = project3D(cell.wx1, cell.y10, wz0);
@@ -872,20 +798,14 @@
           const p01 = project3D(cell.wx0, cell.y01, wz1);
 
           if (!p00 || !p10 || !p11 || !p01 || isQuadOutsideSkyBounds(p00, p10, p11, p01)) {
-            poly.setAttribute("display", "none");
             continue;
           }
 
-          poly.setAttribute("display", "inline");
-          poly.setAttribute("points", formatPoints([p00, p10, p11, p01]));
 
           var gFill,mFill,mStruke,gStroke="none";
           if (cell.isMountain) {
             mFill = lerpRgb([19, 8, 42], [206, 98, 162], horizonFade);
             mStroke = lerpRgb([164, 52, 235], [248, 148, 198], horizonFade);
-            poly.setAttribute("fill", mFill);
-            poly.setAttribute("stroke", mStroke);
-            poly.setAttribute("stroke-width", (lineThickness * 0.85).toFixed(2));
             stripstr+=`<polygon points='${formatPoints([p00, p10, p11, p01])}' stroke='${mStroke}' fill='${mFill}' stroke-width='${(lineThickness * 0.85).toFixed(2)}'></polygon>`;
           } else {
             const isAlt = (stripObj.index + c) % 2 === 0;
@@ -893,9 +813,6 @@
               ? lerpRgb([8, 4, 22], [198, 92, 158], horizonFade)
               : lerpRgb([12, 6, 30], [208, 102, 166], horizonFade);
             gStroke = lerpRgb([132, 44, 212], [244, 142, 194], horizonFade);
-            poly.setAttribute("fill", gFill);
-            poly.setAttribute("stroke", gStroke);
-            poly.setAttribute("stroke-width", lineThickness.toFixed(2));
             stripstr+=`<polygon points='${formatPoints([p00, p10, p11, p01])}' stroke='${gStroke}' fill='${gFill}' stroke-width='${lineThickness.toFixed(2)}'></polygon>`;
           }
 
@@ -911,18 +828,9 @@
         const d1L = project3D(road.r1LeftX, road.r1Y, wz1);
 
         if (!d0L || !d0R || !d1R || !d1L || isQuadOutsideSkyBounds(d0L, d0R, d1R, d1L)) {
-          slot.roadDeckPoly.setAttribute("display", "none");
-          slot.roadLeftYellowLine.setAttribute("display", "none");
-          slot.roadRightYellowLine.setAttribute("display", "none");
-          slot.roadCenterTealLine.setAttribute("display", "none");
         } else {
           const deckFill = lerpRgb([14, 9, 28], [192, 88, 154], horizonFade);
           const deckStroke = lerpRgb([88, 38, 148], [238, 134, 188], horizonFade);
-          slot.roadDeckPoly.setAttribute("display", "inline");
-          slot.roadDeckPoly.setAttribute("points", formatPoints([d0L, d0R, d1R, d1L]));
-          slot.roadDeckPoly.setAttribute("fill", deckFill);
-          slot.roadDeckPoly.setAttribute("stroke", deckStroke);
-          slot.roadDeckPoly.setAttribute("stroke-width", (lineThickness * 0.7).toFixed(2));
 
           stripstr+=`<polygon points='${formatPoints([d0L, d0R, d1R, d1L])}' stroke='${deckStroke}' fill='${deckFill}' stroke-width='${(lineThickness * 0.7).toFixed(2)}'></polygon>`;
 
@@ -935,12 +843,7 @@
           const yL1B = project3D(road.leftYellow1B, road.r1Y + road.lineLift, wz1);
           const yL1A = project3D(road.leftYellow1A, road.r1Y + road.lineLift, wz1);
           if (yL0A && yL0B && yL1B && yL1A && !isQuadOutsideSkyBounds(yL0A, yL0B, yL1B, yL1A)) {
-            slot.roadLeftYellowLine.setAttribute("display", "inline");
-            slot.roadLeftYellowLine.setAttribute("points", formatPoints([yL0A, yL0B, yL1B, yL1A]));
-            slot.roadLeftYellowLine.setAttribute("fill", lerpRgb([255, 214, 56], [252, 168, 192], horizonFade));
             stripstr+=`<polygon points='${formatPoints([yL0A, yL0B, yL1B, yL1A])}' fill='${edgeStripFill}' ></polygon>`;
-          } else {
-            slot.roadLeftYellowLine.setAttribute("display", "none");
           }
 
           const yR0A = project3D(road.rightYellow0A, road.r0Y + road.lineLift, wz0);
@@ -948,12 +851,7 @@
           const yR1B = project3D(road.rightYellow1B, road.r1Y + road.lineLift, wz1);
           const yR1A = project3D(road.rightYellow1A, road.r1Y + road.lineLift, wz1);
           if (yR0A && yR0B && yR1B && yR1A && !isQuadOutsideSkyBounds(yR0A, yR0B, yR1B, yR1A)) {
-            slot.roadRightYellowLine.setAttribute("display", "inline");
-            slot.roadRightYellowLine.setAttribute("points", formatPoints([yR0A, yR0B, yR1B, yR1A]));
-            slot.roadRightYellowLine.setAttribute("fill", lerpRgb([255, 214, 56], [252, 168, 192], horizonFade));
             stripstr+=`<polygon points='${formatPoints([yR0A, yR0B, yR1B, yR1A])}' fill='${edgeStripFill}' ></polygon>`;
-          } else {
-            slot.roadRightYellowLine.setAttribute("display", "none");
           }
 
           // Dashed teal center line
@@ -963,15 +861,8 @@
             const c1B = project3D(road.center1B, road.r1Y + road.lineLift, wz1);
             const c1A = project3D(road.center1A, road.r1Y + road.lineLift, wz1);
             if (c0A && c0B && c1B && c1A && !isQuadOutsideSkyBounds(c0A, c0B, c1B, c1A)) {
-              slot.roadCenterTealLine.setAttribute("display", "inline");
-              slot.roadCenterTealLine.setAttribute("points", formatPoints([c0A, c0B, c1B, c1A]));
-              slot.roadCenterTealLine.setAttribute("fill", lerpRgb([34, 242, 232], [248, 166, 206], horizonFade));
               stripstr+=`<polygon points='${formatPoints([c0A, c0B, c1B, c1A])}' fill='${centerStripFill}' ></polygon>`;
-            } else {
-              slot.roadCenterTealLine.setAttribute("display", "none");
             }
-          } else {
-            slot.roadCenterTealLine.setAttribute("display", "none");
           }
 
         }
@@ -981,19 +872,11 @@
         // ---------------------------------------------------------------------
         const palm = stripPalmPlacements[stripObj.index];
         if (!palm) {
-          if (slot.palmPoly) {
-            slot.group.removeChild(slot.palmPoly);
-            slot.palmPoly = null;
-          }
           return  stripstr;
         }
 
         const baseProj = project3D(palm.wx, palm.wy, palm.wz);
         if (!baseProj) {
-          if (slot.palmPoly) {
-            slot.group.removeChild(slot.palmPoly);
-            slot.palmPoly = null;
-          }
           return stripstr;
         }
 
@@ -1014,29 +897,13 @@
 
         // Cull palm tree completely if its bounding box lies outside the sky rectangle
         if (maxX < SKY_MIN_X || minX > SKY_MAX_X || maxY < SKY_MIN_Y || minY > SKY_MAX_Y) {
-          if (slot.palmPoly) {
-            slot.group.removeChild(slot.palmPoly);
-            slot.palmPoly = null;
-          }
           return stripstr;
-        }
-
-        if (!slot.palmPoly) {
-          slot.palmPoly = document.createElementNS(SVG_NS, "polygon");
-          slot.palmPoly.setAttribute("stroke-linejoin", "round");
-          slot.group.appendChild(slot.palmPoly);
         }
 
         // Silhouette color shifts from deep dark violet-black near camera into sunset pink-magenta haze
         const palmFill = lerpRgb([14, 7, 28], [218, 108, 168], horizonFade);
         const palmStroke = lerpRgb([46, 18, 82], [242, 138, 188], horizonFade);
         const palmStrokeW = (lineThickness * 0.65).toFixed(2);
-
-        slot.palmPoly.setAttribute("points", pointStrs.join(" "));
-        slot.palmPoly.setAttribute("fill", palmFill);
-        slot.palmPoly.setAttribute("stroke", palmStroke);
-        slot.palmPoly.setAttribute("stroke-width", (lineThickness * 0.65).toFixed(2));
-
         stripstr+=`<polygon points='${pointStrs.join(" ")}' fill='${palmFill}' stroke='${palmStroke}' stroke-width='${palmStrokeW}' ></polygon>`;
 
         return stripstr;
@@ -1052,7 +919,6 @@
           const stripObj = stripIndex < TOTAL_STRIPS ? pregeneratedStrips[stripIndex] : null;
           worldstr+=renderStripObject(i, stripObj);
         }
-        console.log(worldstr);
         worldLayer.innerHTML=worldstr;
       }
 
