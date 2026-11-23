@@ -838,11 +838,12 @@
       }
 
       function renderStripObject(slotIndex, stripObj) {
+        var stripstr="";
         const slot = visibleStripSlots[slotIndex];
         // Omit null strips and any segment whose far edge has passed behind the camera
         if (!stripObj || stripObj.wz1 <= camera.z + NEAR_CLIP_Z) {
-          omitCulledStripGroup(slot);
-          return;
+          // omitCulledStripGroup(slot);
+          return stripstr;
         }
         attachStripGroupInOrder(slotIndex, slot.group);
 
@@ -878,22 +879,26 @@
           poly.setAttribute("display", "inline");
           poly.setAttribute("points", formatPoints([p00, p10, p11, p01]));
 
+          var gFill,mFill,mStruke,gStroke="none";
           if (cell.isMountain) {
-            const mFill = lerpRgb([19, 8, 42], [206, 98, 162], horizonFade);
-            const mStroke = lerpRgb([164, 52, 235], [248, 148, 198], horizonFade);
+            mFill = lerpRgb([19, 8, 42], [206, 98, 162], horizonFade);
+            mStroke = lerpRgb([164, 52, 235], [248, 148, 198], horizonFade);
             poly.setAttribute("fill", mFill);
             poly.setAttribute("stroke", mStroke);
             poly.setAttribute("stroke-width", (lineThickness * 0.85).toFixed(2));
+            stripstr+=`<polygon points='${formatPoints([p00, p10, p11, p01])}' stroke='${mStroke}' fill='${mFill}' stroke-width='${(lineThickness * 0.85).toFixed(2)}'></polygon>`;
           } else {
             const isAlt = (stripObj.index + c) % 2 === 0;
-            const gFill = isAlt
+            gFill = isAlt
               ? lerpRgb([8, 4, 22], [198, 92, 158], horizonFade)
               : lerpRgb([12, 6, 30], [208, 102, 166], horizonFade);
-            const gStroke = lerpRgb([132, 44, 212], [244, 142, 194], horizonFade);
+            gStroke = lerpRgb([132, 44, 212], [244, 142, 194], horizonFade);
             poly.setAttribute("fill", gFill);
             poly.setAttribute("stroke", gStroke);
             poly.setAttribute("stroke-width", lineThickness.toFixed(2));
+            stripstr+=`<polygon points='${formatPoints([p00, p10, p11, p01])}' stroke='${gStroke}' fill='${gFill}' stroke-width='${lineThickness.toFixed(2)}'></polygon>`;
           }
+
         }
 
         // ---------------------------------------------------------------------
@@ -960,6 +965,8 @@
           } else {
             slot.roadCenterTealLine.setAttribute("display", "none");
           }
+
+
         }
 
         // ---------------------------------------------------------------------
@@ -971,7 +978,7 @@
             slot.group.removeChild(slot.palmPoly);
             slot.palmPoly = null;
           }
-          return;
+          return  stripstr;
         }
 
         const baseProj = project3D(palm.wx, palm.wy, palm.wz);
@@ -980,7 +987,7 @@
             slot.group.removeChild(slot.palmPoly);
             slot.palmPoly = null;
           }
-          return;
+          return stripstr;
         }
 
         // Perspective-correct pixel height & width from focal scale
@@ -1004,7 +1011,7 @@
             slot.group.removeChild(slot.palmPoly);
             slot.palmPoly = null;
           }
-          return;
+          return stripstr;
         }
 
         if (!slot.palmPoly) {
@@ -1021,17 +1028,22 @@
         slot.palmPoly.setAttribute("fill", palmFill);
         slot.palmPoly.setAttribute("stroke", palmStroke);
         slot.palmPoly.setAttribute("stroke-width", (lineThickness * 0.65).toFixed(2));
+
+        return stripstr;
       }
 
       // Renders only the VISIBLE_STRIP_COUNT pre-generated strips strictly in front of the camera
       function updateWorld() {
         const firstVisibleStripIndex = Math.max(0, Math.floor((camera.z + NEAR_CLIP_Z) / CELL_D));
-
+        
+        var worldstr="";
         for (let i = 0; i < VISIBLE_STRIP_COUNT; i++) {
           const stripIndex = firstVisibleStripIndex + i;
           const stripObj = stripIndex < TOTAL_STRIPS ? pregeneratedStrips[stripIndex] : null;
-          renderStripObject(i, stripObj);
+          worldstr+=renderStripObject(i, stripObj);
         }
+        console.log(worldstr);
+        worldLayer.innerHTML=worldstr;
       }
 
       // =========================================================================
@@ -1067,7 +1079,7 @@
         updateSun();
         updateWorld();
 
-        requestAnimationFrame(animate);
+        // requestAnimationFrame(animate);
       }
 
       // Initial render and start animation loop on window load
