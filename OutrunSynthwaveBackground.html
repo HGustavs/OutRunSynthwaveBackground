@@ -845,7 +845,7 @@
           // omitCulledStripGroup(slot);
           return stripstr;
         }
-        attachStripGroupInOrder(slotIndex, slot.group);
+//        attachStripGroupInOrder(slotIndex, slot.group);
 
         const wz0 = stripObj.wz0;
         const wz1 = stripObj.wz1;
@@ -924,6 +924,11 @@
           slot.roadDeckPoly.setAttribute("stroke", deckStroke);
           slot.roadDeckPoly.setAttribute("stroke-width", (lineThickness * 0.7).toFixed(2));
 
+          stripstr+=`<polygon points='${formatPoints([d0L, d0R, d1R, d1L])}' stroke='${deckStroke}' fill='${deckFill}' stroke-width='${(lineThickness * 0.7).toFixed(2)}'></polygon>`;
+
+          var edgeStripFill=lerpRgb([255, 214, 56], [252, 168, 192], horizonFade);
+          var centerStripFill=lerpRgb([34, 242, 232], [248, 166, 206], horizonFade);
+
           // Yellow outer edge stripes
           const yL0A = project3D(road.leftYellow0A, road.r0Y + road.lineLift, wz0);
           const yL0B = project3D(road.leftYellow0B, road.r0Y + road.lineLift, wz0);
@@ -933,6 +938,7 @@
             slot.roadLeftYellowLine.setAttribute("display", "inline");
             slot.roadLeftYellowLine.setAttribute("points", formatPoints([yL0A, yL0B, yL1B, yL1A]));
             slot.roadLeftYellowLine.setAttribute("fill", lerpRgb([255, 214, 56], [252, 168, 192], horizonFade));
+            stripstr+=`<polygon points='${formatPoints([yL0A, yL0B, yL1B, yL1A])}' fill='${edgeStripFill}' ></polygon>`;
           } else {
             slot.roadLeftYellowLine.setAttribute("display", "none");
           }
@@ -945,6 +951,7 @@
             slot.roadRightYellowLine.setAttribute("display", "inline");
             slot.roadRightYellowLine.setAttribute("points", formatPoints([yR0A, yR0B, yR1B, yR1A]));
             slot.roadRightYellowLine.setAttribute("fill", lerpRgb([255, 214, 56], [252, 168, 192], horizonFade));
+            stripstr+=`<polygon points='${formatPoints([yR0A, yR0B, yR1B, yR1A])}' fill='${edgeStripFill}' ></polygon>`;
           } else {
             slot.roadRightYellowLine.setAttribute("display", "none");
           }
@@ -959,13 +966,13 @@
               slot.roadCenterTealLine.setAttribute("display", "inline");
               slot.roadCenterTealLine.setAttribute("points", formatPoints([c0A, c0B, c1B, c1A]));
               slot.roadCenterTealLine.setAttribute("fill", lerpRgb([34, 242, 232], [248, 166, 206], horizonFade));
+              stripstr+=`<polygon points='${formatPoints([c0A, c0B, c1B, c1A])}' fill='${centerStripFill}' ></polygon>`;
             } else {
               slot.roadCenterTealLine.setAttribute("display", "none");
             }
           } else {
             slot.roadCenterTealLine.setAttribute("display", "none");
           }
-
 
         }
 
@@ -1023,11 +1030,14 @@
         // Silhouette color shifts from deep dark violet-black near camera into sunset pink-magenta haze
         const palmFill = lerpRgb([14, 7, 28], [218, 108, 168], horizonFade);
         const palmStroke = lerpRgb([46, 18, 82], [242, 138, 188], horizonFade);
+        const palmStrokeW = (lineThickness * 0.65).toFixed(2);
 
         slot.palmPoly.setAttribute("points", pointStrs.join(" "));
         slot.palmPoly.setAttribute("fill", palmFill);
         slot.palmPoly.setAttribute("stroke", palmStroke);
         slot.palmPoly.setAttribute("stroke-width", (lineThickness * 0.65).toFixed(2));
+
+        stripstr+=`<polygon points='${pointStrs.join(" ")}' fill='${palmFill}' stroke='${palmStroke}' stroke-width='${palmStrokeW}' ></polygon>`;
 
         return stripstr;
       }
@@ -1079,7 +1089,7 @@
         updateSun();
         updateWorld();
 
-        // requestAnimationFrame(animate);
+        requestAnimationFrame(animate);
       }
 
       // Initial render and start animation loop on window load
