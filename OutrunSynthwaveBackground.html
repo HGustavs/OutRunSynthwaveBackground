@@ -914,7 +914,7 @@
         const firstVisibleStripIndex = Math.max(0, Math.floor((camera.z + NEAR_CLIP_Z) / CELL_D));
         
         var worldstr="";
-        for (let i = 0; i < VISIBLE_STRIP_COUNT; i++) {
+        for (let i = VISIBLE_STRIP_COUNT-1; i >=0 ; i--) {
           const stripIndex = firstVisibleStripIndex + i;
           const stripObj = stripIndex < TOTAL_STRIPS ? pregeneratedStrips[stripIndex] : null;
           worldstr+=renderStripObject(i, stripObj);
