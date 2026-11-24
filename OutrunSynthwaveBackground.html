@@ -536,6 +536,20 @@
                `${pts[3].x.toFixed(1)},${pts[3].y.toFixed(1)}`;
       }
 
+      function formatPath(pts){
+        //  <path d="M150 5 L75 200 L225 200 Z" style="fill:none;stroke:green;stroke-width:3" />
+        return `M${pts[0].x.toFixed(1)} ${pts[0].y.toFixed(1)} ` +
+               `L${pts[1].x.toFixed(1)} ${pts[1].y.toFixed(1)} ` +
+               `L${pts[2].x.toFixed(1)} ${pts[2].y.toFixed(1)} ` +
+               `L${pts[3].x.toFixed(1)} ${pts[3].y.toFixed(1)} Z`;          
+      }
+
+      function formatPoly(pointarray,stroke,fill,linewidth)
+      {
+          return `<polygon points='${formatPoints(pointarray)}' stroke='${stroke}' fill='${fill}' stroke-width='${linewidth}'></polygon>`
+      }
+
+
       // Sky rectangle bounds matching #layer-sky (<rect x="-400" y="-200" width="2000" height="1300" />)
       const SKY_MIN_X = -400;
       const SKY_MAX_X = 1600;
@@ -801,21 +815,23 @@
             continue;
           }
 
+          // More compact representation
+          // <path d="M150 5 L75 200 L225 200 Z" style="fill:none;stroke:green;stroke-width:3" />
 
-          var gFill,mFill,mStruke,gStroke="none";
+          var mFill,mStroke="none";
+          var mLinew=1.0;
           if (cell.isMountain) {
             mFill = lerpRgb([19, 8, 42], [206, 98, 162], horizonFade);
             mStroke = lerpRgb([164, 52, 235], [248, 148, 198], horizonFade);
-            stripstr+=`<polygon points='${formatPoints([p00, p10, p11, p01])}' stroke='${mStroke}' fill='${mFill}' stroke-width='${(lineThickness * 0.85).toFixed(2)}'></polygon>`;
+            mLinew = lineThickness * 0.85;
           } else {
             const isAlt = (stripObj.index + c) % 2 === 0;
-            gFill = isAlt
-              ? lerpRgb([8, 4, 22], [198, 92, 158], horizonFade)
-              : lerpRgb([12, 6, 30], [208, 102, 166], horizonFade);
-            gStroke = lerpRgb([132, 44, 212], [244, 142, 194], horizonFade);
-            stripstr+=`<polygon points='${formatPoints([p00, p10, p11, p01])}' stroke='${gStroke}' fill='${gFill}' stroke-width='${lineThickness.toFixed(2)}'></polygon>`;
+            mFill = isAlt ? lerpRgb([8, 4, 22], [198, 92, 158], horizonFade) : lerpRgb([12, 6, 30], [208, 102, 166], horizonFade);
+            mStroke = lerpRgb([132, 44, 212], [244, 142, 194], horizonFade);
+            mLinew = lineThickness;
           }
-
+          //stripstr+=`<polygon points='${formatPoints([p00, p10, p11, p01])}' stroke='${mStroke}' fill='${mFill}' stroke-width='${mLinew}'></polygon>`;
+          stripstr+=formatPoly([p00, p10, p11, p01],mStroke,mFill,mLinew);
         }
 
         // ---------------------------------------------------------------------
@@ -832,7 +848,8 @@
           const deckFill = lerpRgb([14, 9, 28], [192, 88, 154], horizonFade);
           const deckStroke = lerpRgb([88, 38, 148], [238, 134, 188], horizonFade);
 
-          stripstr+=`<polygon points='${formatPoints([d0L, d0R, d1R, d1L])}' stroke='${deckStroke}' fill='${deckFill}' stroke-width='${(lineThickness * 0.7).toFixed(2)}'></polygon>`;
+          //stripstr+=`<polygon points='${formatPoints([d0L, d0R, d1R, d1L])}' stroke='${deckStroke}' fill='${deckFill}' stroke-width='${(lineThickness * 0.7).toFixed(2)}'></polygon>`;
+          stripstr+=formatPoly([d0L, d0R, d1R, d1L],deckStroke,deckFill,lineThickness * 0.7);
 
           var edgeStripFill=lerpRgb([255, 214, 56], [252, 168, 192], horizonFade);
           var centerStripFill=lerpRgb([34, 242, 232], [248, 166, 206], horizonFade);
@@ -843,7 +860,8 @@
           const yL1B = project3D(road.leftYellow1B, road.r1Y + road.lineLift, wz1);
           const yL1A = project3D(road.leftYellow1A, road.r1Y + road.lineLift, wz1);
           if (yL0A && yL0B && yL1B && yL1A && !isQuadOutsideSkyBounds(yL0A, yL0B, yL1B, yL1A)) {
-            stripstr+=`<polygon points='${formatPoints([yL0A, yL0B, yL1B, yL1A])}' fill='${edgeStripFill}' ></polygon>`;
+            // stripstr+=`<polygon points='${formatPoints([yL0A, yL0B, yL1B, yL1A])}' fill='${edgeStripFill}' ></polygon>`;
+            stripstr+=formatPoly([yL0A, yL0B, yL1B, yL1A],"none",edgeStripFill,0.0);
           }
 
           const yR0A = project3D(road.rightYellow0A, road.r0Y + road.lineLift, wz0);
@@ -851,7 +869,8 @@
           const yR1B = project3D(road.rightYellow1B, road.r1Y + road.lineLift, wz1);
           const yR1A = project3D(road.rightYellow1A, road.r1Y + road.lineLift, wz1);
           if (yR0A && yR0B && yR1B && yR1A && !isQuadOutsideSkyBounds(yR0A, yR0B, yR1B, yR1A)) {
-            stripstr+=`<polygon points='${formatPoints([yR0A, yR0B, yR1B, yR1A])}' fill='${edgeStripFill}' ></polygon>`;
+            // stripstr+=`<polygon points='${formatPoints([yR0A, yR0B, yR1B, yR1A])}' fill='${edgeStripFill}' ></polygon>`;
+            stripstr+=formatPoly([yR0A, yR0B, yR1B, yR1A],"none",edgeStripFill,0.0);            
           }
 
           // Dashed teal center line
@@ -861,7 +880,8 @@
             const c1B = project3D(road.center1B, road.r1Y + road.lineLift, wz1);
             const c1A = project3D(road.center1A, road.r1Y + road.lineLift, wz1);
             if (c0A && c0B && c1B && c1A && !isQuadOutsideSkyBounds(c0A, c0B, c1B, c1A)) {
-              stripstr+=`<polygon points='${formatPoints([c0A, c0B, c1B, c1A])}' fill='${centerStripFill}' ></polygon>`;
+              //stripstr+=`<polygon points='${formatPoints([c0A, c0B, c1B, c1A])}' fill='${centerStripFill}' ></polygon>`;
+              stripstr+=formatPoly([c0A, c0B, c1B, c1A],"none",centerStripFill,0.0);            
             }
           }
 
